@@ -1,0 +1,998 @@
+package httpapi
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/example/live-platform/internal/auth"
+	"github.com/example/live-platform/internal/danmaku"
+	"github.com/example/live-platform/internal/idgen"
+	"github.com/example/live-platform/internal/like"
+	"github.com/example/live-platform/internal/observability"
+	"github.com/example/live-platform/internal/realtime"
+	"github.com/example/live-platform/internal/room"
+	"github.com/example/live-platform/internal/stats"
+	cftoken "github.com/example/live-platform/internal/token"
+	"github.com/example/live-platform/internal/viewer"
+	"go.opentelemetry.io/otel/trace"
+)
+
+type Pinger interface{ Ping(context.Context) error }
+type RealtimeController interface {
+	Pinger
+	Publish(context.Context, string, any) error
+	Unsubscribe(context.Context, string, string) error
+}
+type GovernanceStore interface {
+	RemoveViewer(context.Context, int64, int64) (int64, error)
+	EnforceLikeBan(context.Context, int64, int64, bool) error
+}
+type HistoryStore interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+type Server struct {
+	log        *slog.Logger
+	mysql      Pinger
+	history    HistoryStore
+	redis      Pinger
+	centrifugo RealtimeController
+	governance GovernanceStore
+	metrics    *observability.Metrics
+	auth       *auth.Service
+	profiles   UserReader
+	appTokens  *auth.TokenManager
+	cfTokens   *cftoken.Issuer
+	cfSubTTL   time.Duration
+	rooms      RoomAPI
+	danmaku    *danmaku.Service
+	likes      *like.Service
+	viewers    *viewer.Service
+	stats      *stats.Service
+	mux        *http.ServeMux
+}
+
+type Deps struct {
+	Log        *slog.Logger
+	MySQL      Pinger
+	History    HistoryStore
+	Redis      Pinger
+	Centrifugo RealtimeController
+	Governance GovernanceStore
+	Metrics    *observability.Metrics
+	Auth       *auth.Service
+	Profiles   UserReader
+	AppTokens  *auth.TokenManager
+	CFTokens   *cftoken.Issuer
+	CFSubTTL   time.Duration
+	Rooms      RoomAPI
+	Danmaku    *danmaku.Service
+	Likes      *like.Service
+	Viewers    *viewer.Service
+	Stats      *stats.Service
+}
+type UserReader interface {
+	User(context.Context, int64) (auth.User, error)
+}
+type RoomAPI interface {
+	Create(context.Context, int64, string) (room.Room, error)
+	Get(context.Context, int64) (room.Room, error)
+	List(context.Context, room.Status, int) ([]room.Room, error)
+	Start(context.Context, int64, int64) (room.Room, error)
+	Stop(context.Context, int64, int64) (room.Room, error)
+	Join(context.Context, int64, int64) (room.Room, error)
+	GetRoomAccess(context.Context, int64, int64) (room.RoomAccess, error)
+	IsMuted(context.Context, int64, int64) (bool, error)
+	IsBanned(context.Context, int64, int64) (bool, error)
+	Mute(context.Context, int64, int64, int64, time.Duration, string) error
+	Unmute(context.Context, int64, int64, int64) error
+	ListMutes(context.Context, int64, int64) ([]room.Mute, error)
+	Ban(context.Context, int64, int64, int64, string) error
+	Unban(context.Context, int64, int64, int64) error
+	ListBans(context.Context, int64, int64) ([]room.Ban, error)
+}
+
+func (s *Server) handler(service string) http.Handler {
+	base := requestID(s.log, recoverer(s.log, s.mux))
+	if s.metrics != nil {
+		base = s.metrics.HTTPMiddleware(service, base)
+	}
+	return observability.TraceHTTP(base)
+}
+
+// NewInteraction exposes the Stage 3 high-frequency write routes only. It
+// intentionally preserves the public v1 contract, allowing live-api to route
+// traffic by configuration without client changes or dual writes.
+func NewInteraction(d Deps) http.Handler {
+	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, danmaku: d.Danmaku, likes: d.Likes, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /health", s.health)
+	s.mux.HandleFunc("GET /ready", s.ready)
+	if s.metrics != nil {
+		s.mux.Handle("GET /metrics", s.metrics.Handler())
+	}
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/join", s.requireAuth(s.joinRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/leave", s.requireAuth(s.leaveRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/danmaku", s.requireAuth(s.sendDanmaku))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/like", s.requireAuth(s.likeRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/heartbeat", s.requireAuth(s.heartbeatRoom))
+	return s.handler("live-interaction")
+}
+
+// NewIdentityRoom is the Stage 4 owner for identity, room lifecycle and
+// governance. The gateway forwards the existing v1 contract unchanged.
+func NewIdentityRoom(d Deps) http.Handler {
+	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, governance: d.Governance, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, stats: d.Stats, mux: http.NewServeMux()}
+	if s.governance == nil {
+		if governance, ok := d.Redis.(GovernanceStore); ok {
+			s.governance = governance
+		}
+	}
+	s.mux.HandleFunc("GET /health", s.health)
+	s.mux.HandleFunc("GET /ready", s.ready)
+	if s.metrics != nil {
+		s.mux.Handle("GET /metrics", s.metrics.Handler())
+	}
+	s.mux.HandleFunc("POST /api/v1/auth/register", s.register)
+	s.mux.HandleFunc("POST /api/v1/auth/login", s.login)
+	s.mux.HandleFunc("GET /api/v1/me", s.requireAuth(s.me))
+	s.mux.HandleFunc("POST /api/v1/realtime/token", s.requireAuth(s.realtimeToken))
+	s.mux.HandleFunc("POST /api/v1/rooms", s.requireAuth(s.createRoom))
+	s.mux.HandleFunc("GET /api/v1/rooms", s.listRooms)
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}", s.getRoom)
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/start", s.requireAuth(s.startRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/stop", s.requireAuth(s.stopRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/mutes", s.requireAuth(s.muteUser))
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/mutes", s.requireAuth(s.listMutes))
+	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.requireAuth(s.unmuteUser))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/bans", s.requireAuth(s.banUser))
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/bans", s.requireAuth(s.listBans))
+	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.requireAuth(s.unbanUser))
+	// Internal, versioned read contract for the interaction migration. It is not
+	// exposed by the public gateway Service.
+	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}/access/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+		roomID, ok := pathInt64(w, r, "room_id")
+		if !ok {
+			return
+		}
+		userID, ok := pathInt64(w, r, "user_id")
+		if !ok {
+			return
+		}
+		access, err := s.rooms.GetRoomAccess(r.Context(), roomID, userID)
+		if err != nil {
+			handleRoomError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, access)
+	})
+	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}", s.getRoom)
+	s.mux.HandleFunc("GET /internal/v1/users/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := pathInt64(w, r, "user_id")
+		if !ok {
+			return
+		}
+		u, err := s.auth.User(r.Context(), userID)
+		if err != nil {
+			writeError(w, 404, "USER_NOT_FOUND", "user not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, u)
+	})
+	s.mux.HandleFunc("POST /internal/v1/rooms/{room_id}/join/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+		roomID, ok := pathInt64(w, r, "room_id")
+		if !ok {
+			return
+		}
+		userID, ok := pathInt64(w, r, "user_id")
+		if !ok {
+			return
+		}
+		v, err := s.rooms.Join(r.Context(), roomID, userID)
+		if err != nil {
+			handleRoomError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, v)
+	})
+	return s.handler("live-identity-room")
+}
+
+// NewQuery owns the read routes that previously forced live-api to connect to
+// MySQL and Redis. P2 replaces these transitional source-table reads with a
+// dedicated read model and read-only credentials.
+func NewQuery(d Deps) http.Handler {
+	s := &Server{log: d.Log, mysql: d.MySQL, history: d.History, redis: d.Redis, metrics: d.Metrics, profiles: d.Profiles, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /health", s.health)
+	s.mux.HandleFunc("GET /ready", s.ready)
+	if s.metrics != nil {
+		s.mux.Handle("GET /metrics", s.metrics.Handler())
+	}
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/messages", s.roomMessages)
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/top-viewers", s.topViewers)
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/viewers", s.roomViewers)
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/stats", s.roomStats)
+	return s.handler("live-query")
+}
+
+func (s *Server) topViewers(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	ids, err := s.viewers.Top(r.Context(), roomID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer ranking unavailable")
+		return
+	}
+	items := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		u, err := s.profiles.User(r.Context(), id)
+		if err == nil {
+			items = append(items, map[string]any{"user_id": u.ID, "nickname": u.Nickname, "avatar": u.Avatar})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) roomViewers(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	ids, err := s.viewers.Online(r.Context(), roomID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer list unavailable")
+		return
+	}
+	items := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		if u, err := s.profiles.User(r.Context(), id); err == nil {
+			items = append(items, map[string]any{"user_id": u.ID, "nickname": u.Nickname, "avatar": u.Avatar})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+type historyMessage struct {
+	Type      string    `json:"type"`
+	MessageID string    `json:"message_id"`
+	RoomID    int64     `json:"room_id"`
+	UserID    int64     `json:"user_id"`
+	Nickname  string    `json:"nickname"`
+	Content   string    `json:"content"`
+	GiftName  string    `json:"gift_name,omitempty"`
+	Count     int64     `json:"count,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *Server) roomMessages(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	if s.history == nil {
+		writeError(w, http.StatusServiceUnavailable, "HISTORY_UNAVAILABLE", "message history unavailable")
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 || v > 100 {
+			writeError(w, http.StatusBadRequest, "INVALID_LIMIT", "limit must be between 1 and 100")
+			return
+		}
+		limit = v
+	}
+	rows, err := s.history.QueryContext(r.Context(), `
+SELECT type, message_id, room_id, user_id, nickname, content, gift_name, gift_count, created_at, sequence
+FROM room_message_feed
+WHERE room_id=?
+ORDER BY created_at DESC, sequence DESC LIMIT ?`, roomID, limit)
+	if err != nil {
+		s.log.Error("load room messages", "error", err, "room_id", roomID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load message history")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]historyMessage, 0, limit)
+	for rows.Next() {
+		var item historyMessage
+		var sequence int64
+		if err := rows.Scan(&item.Type, &item.MessageID, &item.RoomID, &item.UserID, &item.Nickname, &item.Content, &item.GiftName, &item.Count, &item.CreatedAt, &sequence); err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load message history")
+			return
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load message history")
+		return
+	}
+	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+		items[left], items[right] = items[right], items[left]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "milestone": "M8"})
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 800*time.Millisecond)
+	defer cancel()
+	var failed []string
+	if err := s.mysql.Ping(ctx); err != nil {
+		failed = append(failed, "mysql")
+	}
+	if err := s.redis.Ping(ctx); err != nil {
+		failed = append(failed, "redis")
+	}
+	if len(failed) > 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "failed": failed})
+		return
+	}
+
+	// Centrifugo is a route-level realtime dependency, not a reason to remove the
+	// entire API pod from Kubernetes Service endpoints. Gift transactions, auth,
+	// and other HTTP operations can remain available while realtime temporarily
+	// degrades. Surface that state without triggering a readiness cascade.
+	var degraded []string
+	if s.centrifugo != nil {
+		if err := s.centrifugo.Ping(ctx); err != nil {
+			degraded = append(degraded, "centrifugo")
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "degraded": degraded})
+}
+
+type registerRequest struct {
+	Username string `json:"username"`
+	Nickname string `json:"nickname"`
+	Password string `json:"password"`
+}
+
+func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	var in registerRequest
+	if err := decodeJSON(w, r, 32<<10, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	out, err := s.auth.Register(r.Context(), in.Username, in.Nickname, in.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrUsernameTaken):
+			writeError(w, http.StatusConflict, "USERNAME_TAKEN", err.Error())
+		case errors.Is(err, auth.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, "INVALID_AUTH_INPUT", err.Error())
+		default:
+			s.log.Error("register failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "register failed")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+type loginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var in loginRequest
+	if err := decodeJSON(w, r, 16<<10, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	out, err := s.auth.Login(r.Context(), in.Username, in.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidCredentials):
+			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", err.Error())
+		case errors.Is(err, auth.ErrUserDisabled):
+			writeError(w, http.StatusForbidden, "USER_DISABLED", err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "login failed")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) me(w http.ResponseWriter, r *http.Request, userID int64) {
+	u, err := s.auth.User(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "USER_NOT_FOUND", "user not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
+}
+
+func (s *Server) realtimeToken(w http.ResponseWriter, _ *http.Request, userID int64) {
+	jwt, exp, err := s.cfTokens.ConnectionToken(strconv.FormatInt(userID, 10))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to issue realtime token")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": jwt, "expire_at": exp.Unix()})
+}
+
+type roomListItem struct {
+	room.Room
+	ViewerCount int64 `json:"viewer_count"`
+	LikeCount   int64 `json:"like_count"`
+}
+
+func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
+	status := room.Status(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))))
+	if status == "" {
+		status = room.StatusLiving
+	}
+	limit := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 || v > 100 {
+			writeError(w, http.StatusBadRequest, "INVALID_LIMIT", "limit must be between 1 and 100")
+			return
+		}
+		limit = v
+	}
+	items, err := s.rooms.List(r.Context(), status, limit)
+	if err != nil {
+		if errors.Is(err, room.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, "INVALID_ROOM_FILTER", err.Error())
+			return
+		}
+		s.log.Error("list rooms failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list rooms")
+		return
+	}
+	out := make([]roomListItem, 0, len(items))
+	for _, v := range items {
+		item := roomListItem{Room: v}
+		if s.stats != nil {
+			if snap, snapErr := s.stats.Get(r.Context(), v.ID); snapErr == nil {
+				item.ViewerCount = snap.ViewerCount
+				item.LikeCount = snap.LikeCount
+			}
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+type createRoomRequest struct {
+	Title string `json:"title"`
+}
+
+func (s *Server) createRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	var in createRoomRequest
+	if err := decodeJSON(w, r, 16<<10, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	v, err := s.rooms.Create(r.Context(), userID, in.Title)
+	if err != nil {
+		if errors.Is(err, room.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, "INVALID_ROOM_INPUT", err.Error())
+		} else {
+			s.log.Error("create room failed", "error", err, "user_id", userID)
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "create room failed")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	v, err := s.rooms.Get(r.Context(), roomID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) startRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	v, err := s.rooms.Start(r.Context(), roomID, userID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) stopRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	v, err := s.rooms.Stop(r.Context(), roomID, userID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+type subscription struct {
+	Channel string `json:"channel"`
+	Token   string `json:"token"`
+}
+
+func (s *Server) joinRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	v, err := s.rooms.Join(r.Context(), roomID, userID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	viewerState, err := s.viewers.Touch(r.Context(), roomID, userID)
+	if err != nil {
+		s.log.Error("touch viewer on join", "error", err, "room_id", roomID, "user_id", userID)
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer tracking unavailable")
+		return
+	}
+	var snapshot stats.Snapshot
+	if s.stats != nil {
+		var err error
+		snapshot, err = s.stats.Get(r.Context(), roomID)
+		if err != nil {
+			s.log.Error("load stats on join", "error", err, "room_id", roomID)
+			writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "room stats unavailable")
+			return
+		}
+	}
+	snapshot.ViewerCount = viewerState.ViewerCount
+	uid := strconv.FormatInt(userID, 10)
+	channels := []string{realtime.RoomStream(roomID), realtime.RoomStats(roomID)}
+	subs := make([]subscription, 0, len(channels))
+	for _, ch := range channels {
+		if s.cfTokens == nil {
+			writeError(w, http.StatusServiceUnavailable, "REALTIME_UNAVAILABLE", "realtime token issuer unavailable")
+			return
+		}
+		tok, _, err := s.cfTokens.SubscriptionToken(uid, ch, s.cfSubTTL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to authorize room subscription")
+			return
+		}
+		subs = append(subs, subscription{Channel: ch, Token: tok})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"room": v, "subscriptions": subs, "personal_channel": realtime.Personal(userID),
+		"stats": snapshot, "heartbeat_interval_seconds": maxInt64(5, viewerState.ExpiresIn/3),
+	})
+}
+
+func (s *Server) leaveRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	count, err := s.viewers.Leave(r.Context(), roomID, userID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer tracking unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"viewer_count": count})
+}
+
+type danmakuRequest struct {
+	Content string `json:"content"`
+}
+
+func (s *Server) sendDanmaku(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	var in danmakuRequest
+	if err := decodeJSON(w, r, 8<<10, &in); err != nil {
+		if s.metrics != nil {
+			s.metrics.Danmaku.WithLabelValues("rejected").Inc()
+		}
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	e, err := s.danmaku.Send(r.Context(), roomID, userID, in.Content)
+	if err != nil {
+		if s.metrics != nil {
+			result := "failed"
+			if errors.Is(err, danmaku.ErrRateLimited) || errors.Is(err, danmaku.ErrMuted) || errors.Is(err, danmaku.ErrSensitive) || errors.Is(err, danmaku.ErrInvalidContent) || errors.Is(err, room.ErrNotFound) || errors.Is(err, room.ErrNotLiving) || errors.Is(err, room.ErrBanned) {
+				result = "rejected"
+			}
+			s.metrics.Danmaku.WithLabelValues(result).Inc()
+		}
+		switch {
+		case errors.Is(err, danmaku.ErrRateLimited):
+			writeError(w, http.StatusTooManyRequests, "RATE_LIMITED", err.Error())
+		case errors.Is(err, danmaku.ErrMuted):
+			writeError(w, http.StatusForbidden, "USER_MUTED", err.Error())
+		case errors.Is(err, danmaku.ErrSensitive):
+			writeError(w, http.StatusUnprocessableEntity, "SENSITIVE_CONTENT", err.Error())
+		case errors.Is(err, danmaku.ErrInvalidContent):
+			writeError(w, http.StatusBadRequest, "INVALID_DANMAKU", err.Error())
+		case errors.Is(err, room.ErrNotFound), errors.Is(err, room.ErrNotLiving), errors.Is(err, room.ErrBanned):
+			handleRoomError(w, err)
+		default:
+			s.log.Error("send danmaku failed", "error", err, "room_id", roomID, "user_id", userID)
+			writeError(w, http.StatusBadGateway, "DANMAKU_FAILED", "failed to send danmaku")
+		}
+		return
+	}
+	if s.metrics != nil {
+		s.metrics.Danmaku.WithLabelValues("success").Inc()
+	}
+	writeJSON(w, http.StatusOK, e)
+}
+
+type likeRequest struct {
+	Count int64 `json:"count"`
+}
+
+func (s *Server) likeRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	var in likeRequest
+	if err := decodeJSON(w, r, 8<<10, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	result, err := s.likes.Add(r.Context(), roomID, userID, in.Count)
+	if err != nil {
+		switch {
+		case errors.Is(err, like.ErrInvalidCount):
+			writeError(w, http.StatusBadRequest, "INVALID_LIKE_COUNT", err.Error())
+		case errors.Is(err, like.ErrRateLimited):
+			writeError(w, http.StatusTooManyRequests, "LIKE_RATE_LIMITED", err.Error())
+		case errors.Is(err, room.ErrNotFound), errors.Is(err, room.ErrNotLiving), errors.Is(err, room.ErrBanned):
+			handleRoomError(w, err)
+		default:
+			s.log.Error("add like failed", "error", err, "room_id", roomID, "user_id", userID)
+			writeError(w, http.StatusServiceUnavailable, "LIKE_UNAVAILABLE", "failed to record like")
+		}
+		return
+	}
+	if s.metrics != nil {
+		s.metrics.Likes.Add(float64(in.Count))
+	}
+	writeJSON(w, http.StatusAccepted, result)
+}
+
+func (s *Server) heartbeatRoom(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	v, err := s.rooms.Get(r.Context(), roomID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	if v.Status != room.StatusLiving {
+		handleRoomError(w, room.ErrNotLiving)
+		return
+	}
+	banned, err := s.rooms.IsBanned(r.Context(), roomID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to check room access")
+		return
+	}
+	if banned {
+		handleRoomError(w, room.ErrBanned)
+		return
+	}
+	result, err := s.viewers.Touch(r.Context(), roomID, userID)
+	if err != nil {
+		s.log.Error("viewer heartbeat failed", "error", err, "room_id", roomID, "user_id", userID)
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer tracking unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) roomStats(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	if _, err := s.rooms.Get(r.Context(), roomID); err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	v, err := s.stats.Get(r.Context(), roomID)
+	if err != nil {
+		s.log.Error("get room stats failed", "error", err, "room_id", roomID)
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "room stats unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+type muteRequest struct {
+	UserID          int64  `json:"user_id"`
+	DurationSeconds int64  `json:"duration_seconds"`
+	Reason          string `json:"reason"`
+}
+
+func (s *Server) muteUser(w http.ResponseWriter, r *http.Request, actorID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	var in muteRequest
+	const maxMuteSeconds = int64(30 * 24 * 60 * 60)
+	if err := decodeJSON(w, r, 8<<10, &in); err != nil || in.UserID <= 0 || in.DurationSeconds < 0 || in.DurationSeconds > maxMuteSeconds {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "valid user_id and duration_seconds between 0 and 2592000 are required")
+		return
+	}
+	if err := s.rooms.Mute(r.Context(), roomID, actorID, in.UserID, time.Duration(in.DurationSeconds)*time.Second, in.Reason); err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	if s.centrifugo != nil {
+		event := realtime.NewPriorityEvent(idgen.New(), "room_muted", roomID, "P0", map[string]any{
+			"user_id": in.UserID, "duration_seconds": in.DurationSeconds, "reason": strings.TrimSpace(in.Reason),
+		})
+		if err := s.centrifugo.Publish(r.Context(), realtime.Personal(in.UserID), event); err != nil {
+			s.log.Error("publish mute notice", "error", err, "room_id", roomID, "user_id", in.UserID)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "muted", "user_id": in.UserID})
+}
+
+func (s *Server) listMutes(w http.ResponseWriter, r *http.Request, actorID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	items, err := s.rooms.ListMutes(r.Context(), roomID, actorID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) unmuteUser(w http.ResponseWriter, r *http.Request, actorID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	targetID, ok := pathInt64(w, r, "user_id")
+	if !ok {
+		return
+	}
+	if err := s.rooms.Unmute(r.Context(), roomID, actorID, targetID); err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "unmuted", "user_id": targetID})
+}
+
+type banRequest struct {
+	UserID int64  `json:"user_id"`
+	Reason string `json:"reason"`
+}
+
+func (s *Server) banUser(w http.ResponseWriter, r *http.Request, actorID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	var in banRequest
+	if err := decodeJSON(w, r, 8<<10, &in); err != nil || in.UserID <= 0 {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "valid user_id is required")
+		return
+	}
+	if err := s.rooms.Ban(r.Context(), roomID, actorID, in.UserID, in.Reason); err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	if err := s.enforceBan(r.Context(), roomID, in.UserID, strings.TrimSpace(in.Reason)); err != nil {
+		s.log.Error("enforce room ban", "error", err, "room_id", roomID, "user_id", in.UserID)
+		writeError(w, http.StatusServiceUnavailable, "BAN_ENFORCEMENT_FAILED", "ban saved but immediate eviction failed; retry safely")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "banned", "user_id": in.UserID})
+}
+
+func (s *Server) listBans(w http.ResponseWriter, r *http.Request, actorID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	items, err := s.rooms.ListBans(r.Context(), roomID, actorID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) unbanUser(w http.ResponseWriter, r *http.Request, actorID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	targetID, ok := pathInt64(w, r, "user_id")
+	if !ok {
+		return
+	}
+	if err := s.rooms.Unban(r.Context(), roomID, actorID, targetID); err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	if s.governance != nil {
+		if err := s.governance.EnforceLikeBan(r.Context(), roomID, targetID, false); err != nil {
+			s.log.Error("clear like ban cache", "error", err, "room_id", roomID, "user_id", targetID)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "unbanned", "user_id": targetID})
+}
+
+func (s *Server) enforceBan(ctx context.Context, roomID, userID int64, reason string) error {
+	var enforcementErrors []error
+	if s.governance != nil {
+		if err := s.governance.EnforceLikeBan(ctx, roomID, userID, true); err != nil {
+			enforcementErrors = append(enforcementErrors, fmt.Errorf("cache ban: %w", err))
+		}
+		if _, err := s.governance.RemoveViewer(ctx, roomID, userID); err != nil {
+			enforcementErrors = append(enforcementErrors, fmt.Errorf("remove viewer: %w", err))
+		}
+	} else {
+		enforcementErrors = append(enforcementErrors, errors.New("governance store unavailable"))
+	}
+	if s.centrifugo != nil {
+		event := realtime.NewPriorityEvent(idgen.New(), "room_banned", roomID, "P0", map[string]any{
+			"user_id": userID, "reason": reason,
+		})
+		if err := s.centrifugo.Publish(ctx, realtime.Personal(userID), event); err != nil {
+			enforcementErrors = append(enforcementErrors, fmt.Errorf("publish ban notice: %w", err))
+		}
+		uid := strconv.FormatInt(userID, 10)
+		for _, channel := range []string{realtime.RoomStream(roomID), realtime.RoomStats(roomID)} {
+			if err := s.centrifugo.Unsubscribe(ctx, uid, channel); err != nil {
+				enforcementErrors = append(enforcementErrors, fmt.Errorf("unsubscribe %s: %w", channel, err))
+			}
+		}
+	} else {
+		enforcementErrors = append(enforcementErrors, errors.New("centrifugo unavailable"))
+	}
+	return errors.Join(enforcementErrors...)
+}
+
+type authedHandler func(http.ResponseWriter, *http.Request, int64)
+
+func (s *Server) requireAuth(next authedHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(h, "Bearer ") {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer token")
+			return
+		}
+		claims, err := s.appTokens.Verify(strings.TrimSpace(strings.TrimPrefix(h, "Bearer ")))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
+			return
+		}
+		next(w, r, claims.UserID)
+	}
+}
+
+func handleRoomError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, room.ErrNotFound):
+		writeError(w, http.StatusNotFound, "ROOM_NOT_FOUND", err.Error())
+	case errors.Is(err, room.ErrNotLiving):
+		writeError(w, http.StatusConflict, "ROOM_NOT_LIVING", err.Error())
+	case errors.Is(err, room.ErrBanned):
+		writeError(w, http.StatusForbidden, "ROOM_BANNED", err.Error())
+	case errors.Is(err, room.ErrForbidden):
+		writeError(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+	case errors.Is(err, room.ErrUserNotFound):
+		writeError(w, http.StatusNotFound, "USER_NOT_FOUND", err.Error())
+	case errors.Is(err, room.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, "INVALID_ROOM_INPUT", err.Error())
+	case errors.Is(err, room.ErrSelfModeration):
+		writeError(w, http.StatusBadRequest, "SELF_MODERATION_NOT_ALLOWED", err.Error())
+	case errors.Is(err, room.ErrInvalidState):
+		writeError(w, http.StatusConflict, "INVALID_ROOM_STATE", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "room operation failed")
+	}
+}
+
+func pathInt64(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
+	v, err := strconv.ParseInt(r.PathValue(name), 10, 64)
+	if err != nil || v <= 0 {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", name+" must be a positive integer")
+		return 0, false
+	}
+	return v, true
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, max int64, dst any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, max))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return errors.New("invalid json body")
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("json body must contain exactly one object")
+	}
+	return nil
+}
+
+func requestID(log *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			id = idgen.New()
+		}
+		r.Header.Set("X-Request-ID", id)
+		w.Header().Set("X-Request-ID", id)
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		attrs := []any{"request_id", id, "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(start).Milliseconds()}
+		if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+			attrs = append(attrs, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+		}
+		log.InfoContext(r.Context(), "http request", attrs...)
+	})
+}
+
+func recoverer(log *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if v := recover(); v != nil {
+				log.Error("panic recovered", "panic", v, "path", r.URL.Path, "stack", string(debug.Stack()))
+				writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, code int, errCode, msg string) {
+	writeJSON(w, code, map[string]any{"code": errCode, "message": msg})
+}

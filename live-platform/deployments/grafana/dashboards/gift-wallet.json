@@ -1,0 +1,314 @@
+{
+  "uid": "live-gift-wallet",
+  "title": "LUMI LIVE · Gift / Wallet",
+  "tags": [
+    "M6",
+    "M7",
+    "live-platform"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 2,
+  "refresh": "5s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Gift requests",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(live_gift_orders_total[1m])) by (result)",
+          "legendFormat": "{{service}}{{result}}{{topic}}{{group}}{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Outbox pending",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "live_outbox_pending",
+          "legendFormat": "{{service}}{{result}}{{topic}}{{group}}{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Outbox publish rate",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(live_outbox_publish_total[1m])) by (result)",
+          "legendFormat": "{{service}}{{result}}{{topic}}{{group}}{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Outbox retry rate",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(live_outbox_retry_total[1m])",
+          "legendFormat": "{{service}}{{result}}{{topic}}{{group}}{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Gift rate-limited requests",
+      "type": "timeseries",
+      "description": "Per-user gift abuse protection. Idempotent replays are resolved before this limiter.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(live_gift_rate_limited_total[1m])",
+          "legendFormat": "rate limited"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "MySQL pool in-use vs max",
+      "type": "timeseries",
+      "description": "live-api sql.DB utilization. Sustained in-use near max plus growing waits indicates pool saturation.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "live_db_pool_in_use_connections{service=\"live-api\",pool=\"mysql\"}",
+          "legendFormat": "in use"
+        },
+        {
+          "refId": "B",
+          "expr": "live_db_pool_max_open_connections{service=\"live-api\",pool=\"mysql\"}",
+          "legendFormat": "max open"
+        },
+        {
+          "refId": "C",
+          "expr": "live_db_pool_open_connections{service=\"live-api\",pool=\"mysql\"}",
+          "legendFormat": "open"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "MySQL pool wait pressure",
+      "type": "timeseries",
+      "description": "Rate of pool waits and seconds of wait time accrued per second by live-api.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(live_db_pool_wait_total{service=\"live-api\",pool=\"mysql\"}[1m])",
+          "legendFormat": "waits/s"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(live_db_pool_wait_duration_seconds_total{service=\"live-api\",pool=\"mysql\"}[1m])",
+          "legendFormat": "wait seconds/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    }
+  ]
+}

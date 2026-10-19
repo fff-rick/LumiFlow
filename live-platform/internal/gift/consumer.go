@@ -1,0 +1,108 @@
+package gift
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/example/live-platform/internal/eventdedup"
+	"github.com/example/live-platform/internal/mq"
+	"github.com/example/live-platform/internal/realtime"
+)
+
+type DedupStore interface {
+	Begin(context.Context, string, string, time.Duration) (bool, error)
+	Done(context.Context, string, string) error
+	Fail(context.Context, string, string, error) error
+}
+
+type realtimeGiftPayload struct {
+	MessageID   string `json:"message_id"`
+	OrderNo     string `json:"order_no"`
+	UserID      int64  `json:"user_id"`
+	AnchorID    int64  `json:"anchor_id"`
+	GiftID      int64  `json:"gift_id"`
+	GiftName    string `json:"gift_name"`
+	Count       int64  `json:"count"`
+	UnitPrice   int64  `json:"unit_price"`
+	TotalAmount int64  `json:"total_amount"`
+}
+
+func decodeRealtimeGiftPayload(raw json.RawMessage) (realtimeGiftPayload, bool) {
+	var p realtimeGiftPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return realtimeGiftPayload{}, false
+	}
+	valid := p.OrderNo != "" && p.UserID > 0 && p.AnchorID > 0 && p.GiftID > 0 && p.GiftName != "" && p.Count > 0 && p.UnitPrice >= 0 && p.TotalAmount >= 0
+	if !valid {
+		return realtimeGiftPayload{}, false
+	}
+	// 消费者根据订单号统一业务身份，也兼容部署前已经写入、尚未消费且不含 message_id 的 Outbox 记录。
+	p.MessageID = messageID(p.OrderNo)
+	return p, true
+}
+
+type ConsumerHandler struct {
+	group     string
+	dedup     DedupStore
+	publisher realtime.Publisher
+	lease     time.Duration
+}
+
+func NewConsumerHandler(group string, dedup DedupStore, publisher realtime.Publisher, lease time.Duration) *ConsumerHandler {
+	return &ConsumerHandler{group: group, dedup: dedup, publisher: publisher, lease: lease}
+}
+
+func (h *ConsumerHandler) Handle(ctx context.Context, rec mq.Record) error {
+	var envelope mq.Envelope
+	if err := json.Unmarshal(rec.Value, &envelope); err != nil {
+		return mq.Permanent(fmt.Errorf("decode gift envelope: %w", err))
+	}
+	if err := envelope.ValidateRoomEnvelope(); err != nil {
+		return mq.Permanent(fmt.Errorf("invalid gift envelope: %w", err))
+	}
+	if envelope.EventType != mq.EventTypeGiftSent {
+		return mq.Permanent(fmt.Errorf("invalid gift envelope"))
+	}
+	done, err := h.dedup.Begin(ctx, h.group, envelope.EventID, h.lease)
+	if err != nil {
+		if err == eventdedup.ErrBusy {
+			return err
+		}
+		return fmt.Errorf("begin gift dedup: %w", err)
+	}
+	if done {
+		return nil
+	}
+
+	payload, valid := decodeRealtimeGiftPayload(envelope.Payload)
+	if len(envelope.Payload) == 0 || !valid {
+		err := fmt.Errorf("invalid gift payload")
+		if failErr := h.dedup.Fail(ctx, h.group, envelope.EventID, err); failErr != nil {
+			return fmt.Errorf("release invalid gift event: %w", failErr)
+		}
+		return mq.Permanent(err)
+	}
+	wirePayload, err := json.Marshal(payload)
+	if err != nil {
+		_ = h.dedup.Fail(ctx, h.group, envelope.EventID, err)
+		return fmt.Errorf("encode gift realtime payload: %w", err)
+	}
+	wire := realtime.Event{
+		EventID:   envelope.EventID,
+		Type:      "gift",
+		RoomID:    envelope.RoomID,
+		Priority:  "P1",
+		Timestamp: envelope.CreatedAt.UnixMilli(),
+		Data:      wirePayload,
+	}
+	if err := h.publisher.Publish(ctx, realtime.RoomStream(envelope.RoomID), wire); err != nil {
+		_ = h.dedup.Fail(ctx, h.group, envelope.EventID, err)
+		return fmt.Errorf("publish gift realtime: %w", err)
+	}
+	if err := h.dedup.Done(ctx, h.group, envelope.EventID); err != nil {
+		return fmt.Errorf("mark gift processed: %w", err)
+	}
+	return nil
+}

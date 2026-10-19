@@ -1,0 +1,68 @@
+environment: "performance"
+port: 8080
+jwt:
+  secret: ""
+  access_ttl: "2h"
+
+internal:
+  token: ""
+
+auth:
+  public_url: "http://localhost:5173"
+  smtp: {host: "", port: 587, username: "", password: "", from: "", tls_mode: "starttls"}
+  google: {client_id: "", client_secret: ""}
+  github: {client_id: "", client_secret: ""}
+
+governance:
+  request_timeout: "3s"
+  recommendation_timeout: "500ms"
+  shutdown_timeout: "5s"
+  rate_limit_rps: 10000
+  rate_limit_burst: 20000
+
+database:
+  host: "mysql"
+  port: 3306
+  user: "fluxfeed"
+  password: ""
+  name: "FluxFeed"
+  tls: "false"
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+  tls: false
+  tls_server_name: ""
+
+kafka:
+  brokers: ["kafka:19092"]
+  username: ""
+  password: ""
+  tls: false
+  tls_server_name: ""
+  client_id: "fluxfeed"
+  video_topic: "fluxfeed.video"
+  interaction_topic: "fluxfeed.interaction"
+  exposure_topic: "fluxfeed.exposure"
+  relation_topic: "fluxfeed.relation"
+  fanout_group: "fluxfeed-fanout"
+  embedding_group: "fluxfeed-embedding"
+  counter_group: "fluxfeed-counter"
+  feature_group: "fluxfeed-feature"
+  recommendation_group: "fluxfeed-recommendation"
+  consumer_max_retries: 5
+  consumer_retry_backoff: "200ms"
+
+rabbitmq:
+  url: ""
+  interaction_exchange: "fluxfeed.interaction"
+  action_changed_queue: "fluxfeed.interaction.action_changed"
+  action_changed_routing: "interaction.action_changed"
+  video_exchange: "fluxfeed.video"
+  video_published_queue: "fluxfeed.video.published"
+  video_embedding_queue: "fluxfeed.video.embedding"
+  video_published_routing: "video.published"
+  exposure_exchange: "fluxfeed.exposure"
+  view_event_recorded_queue: "fluxfeed.exposure.view_event_recorded"
+  view_event_recorded_routing: "exposure.view_event_recorded"

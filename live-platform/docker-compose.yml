@@ -1,0 +1,394 @@
+x-app-env: &app-env
+  HTTP_ADDR: ":8080"
+  MYSQL_MAX_OPEN_CONNS: "${MYSQL_MAX_OPEN_CONNS:-40}"
+  MYSQL_MAX_IDLE_CONNS: "${MYSQL_MAX_IDLE_CONNS:-20}"
+  MYSQL_CONN_MAX_LIFETIME: "${MYSQL_CONN_MAX_LIFETIME:-30m}"
+  REDIS_ADDR: "redis:6379"
+  REDIS_DB: "0"
+  CENTRIFUGO_API_URL: "http://centrifugo:8000/api"
+  CENTRIFUGO_API_KEY: "dev-api-key-change-me"
+  CENTRIFUGO_TOKEN_SECRET: "dev-token-secret-change-me"
+  CENTRIFUGO_TOKEN_TTL: "1h"
+  CENTRIFUGO_SUBSCRIPTION_TOKEN_TTL: "5m"
+  AUTH_JWT_SECRET: "dev-app-jwt-secret-change-me"
+  AUTH_TOKEN_TTL: "24h"
+  COMMERCE_HTTP_ADDR: ":8081"
+  COMMERCE_BASE_URL: "http://live-commerce:8081"
+  INTERACTION_HTTP_ADDR: ":8082"
+  INTERACTION_BASE_URL: "http://live-interaction:8082"
+  IDENTITY_ROOM_HTTP_ADDR: ":8083"
+  IDENTITY_ROOM_BASE_URL: "http://live-identity-room:8083"
+  QUERY_HTTP_ADDR: ":8084"
+  QUERY_BASE_URL: "http://live-query:8084"
+  VIDEO_HTTP_ADDR: ":8085"
+  VIDEO_BASE_URL: "http://live-video:8085"
+  DANMAKU_SENSITIVE_WORDS: "spam,banned"
+  DANMAKU_USER_RATE_LIMIT: "${DANMAKU_USER_RATE_LIMIT:-5}"
+  DANMAKU_USER_RATE_WINDOW: "${DANMAKU_USER_RATE_WINDOW:-10s}"
+  DANMAKU_HOT_VIEWERS: "${DANMAKU_HOT_VIEWERS:-50000}"
+  DANMAKU_PROTECT_VIEWERS: "${DANMAKU_PROTECT_VIEWERS:-100000}"
+  DANMAKU_HOT_RATE: "${DANMAKU_HOT_RATE:-500}"
+  DANMAKU_PROTECT_RATE: "${DANMAKU_PROTECT_RATE:-2000}"
+  DANMAKU_HOT_SAMPLE_RATE: "${DANMAKU_HOT_SAMPLE_RATE:-0.5}"
+  DANMAKU_PROTECT_SAMPLE_RATE: "${DANMAKU_PROTECT_SAMPLE_RATE:-0.2}"
+  DANMAKU_RATE_WINDOW: "${DANMAKU_RATE_WINDOW:-1s}"
+  DANMAKU_ADAPTIVE_ENABLED: "${DANMAKU_ADAPTIVE_ENABLED:-true}"
+  DANMAKU_TARGET_FANOUT_RATE: "${DANMAKU_TARGET_FANOUT_RATE:-25000}"
+  DANMAKU_HOT_FANOUT_RATE: "${DANMAKU_HOT_FANOUT_RATE:-30000}"
+  DANMAKU_PROTECT_FANOUT_RATE: "${DANMAKU_PROTECT_FANOUT_RATE:-40000}"
+  DANMAKU_MIN_SAMPLE_RATE: "${DANMAKU_MIN_SAMPLE_RATE:-0.05}"
+  GIFT_MAX_COUNT_PER_REQUEST: "${GIFT_MAX_COUNT_PER_REQUEST:-100}"
+  GIFT_USER_RATE_LIMIT: "${GIFT_USER_RATE_LIMIT:-10}"
+  GIFT_USER_RATE_WINDOW: "${GIFT_USER_RATE_WINDOW:-1s}"
+  LIKE_USER_RATE_LIMIT: "${LIKE_USER_RATE_LIMIT:-300}"
+  LIKE_USER_RATE_WINDOW: "${LIKE_USER_RATE_WINDOW:-1s}"
+  LIKE_ROOM_CACHE_TTL: "${LIKE_ROOM_CACHE_TTL:-2s}"
+  LIKE_BAN_CACHE_TTL: "${LIKE_BAN_CACHE_TTL:-1s}"
+  VIEWER_TTL: "90s"
+  STATS_INTERVAL: "200ms"
+  ACTIVE_ROOM_WINDOW: "3m"
+  ACTIVE_ROOM_BATCH: "1000"
+  ACTIVE_ROOM_SHARDS: "${ACTIVE_ROOM_SHARDS:-16}"
+  LIKE_SNAPSHOT_INTERVAL: "10s"
+  ENABLE_DEV_WALLET_CREDIT: "true"
+  KAFKA_BROKERS: "kafka:19092"
+  KAFKA_DANMAKU_TOPIC: "live.danmaku.v1"
+  KAFKA_GIFT_TOPIC: "live.gift.v1"
+  KAFKA_DANMAKU_CONSUMER_GROUP: "live-danmaku-persist-v1"
+  KAFKA_GIFT_CONSUMER_GROUP: "live-gift-realtime-v1"
+  KAFKA_CONSUMER_LEASE: "30s"
+  OUTBOX_POLL_INTERVAL: "100ms"
+  OUTBOX_BATCH_SIZE: "100"
+  OUTBOX_LEASE: "30s"
+  OUTBOX_PRODUCE_TIMEOUT: "5s"
+  WORKER_METRICS_ADDR: ":9090"
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+  OTEL_INSECURE: "true"
+  OTEL_SAMPLE_RATIO: "${OTEL_SAMPLE_RATIO:-1}"
+  DEPLOYMENT_ENVIRONMENT: "development"
+
+x-gateway-env: &gateway-env
+  HTTP_ADDR: ":8080"
+  COMMERCE_BASE_URL: "http://live-commerce:8081"
+  INTERACTION_BASE_URL: "http://live-interaction:8082"
+  IDENTITY_ROOM_BASE_URL: "http://live-identity-room:8083"
+  QUERY_BASE_URL: "http://live-query:8084"
+  VIDEO_BASE_URL: "http://live-video:8085"
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+  OTEL_INSECURE: "true"
+  OTEL_SAMPLE_RATIO: "${OTEL_SAMPLE_RATIO:-1}"
+  DEPLOYMENT_ENVIRONMENT: "development"
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: live
+      MYSQL_USER: live
+      MYSQL_PASSWORD: live
+      MYSQL_ROOT_PASSWORD: root
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    ports: ["${MYSQL_HOST_PORT:-3307}:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7.4-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.91.1
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      redis: {condition: service_healthy}
+
+  mysql-exporter:
+    image: prom/mysqld-exporter:v0.19.0
+    command: ["--config.my-cnf=/cfg/.my.cnf"]
+    volumes:
+      - ./deployments/mysqld-exporter/.my.cnf:/cfg/.my.cnf:ro
+    depends_on:
+      mysql: {condition: service_healthy}
+
+  kafka:
+    image: apache/kafka:4.3.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-19092},PLAINTEXT://kafka:19092"
+      KAFKA_LISTENERS: "CONTROLLER://:29093,PLAINTEXT_HOST://:9092,PLAINTEXT://:19092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: "1"
+      KAFKA_NUM_PARTITIONS: "6"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    # Windows/WSL 常会保留 9000 段端口；宿主机端口可通过 KAFKA_HOST_PORT 覆盖。
+    ports: ["${KAFKA_HOST_PORT:-19092}:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes: ["kafka_data:/var/lib/kafka/data"]
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.danmaku.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.gift.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.danmaku.v1.dlq --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.gift.v1.dlq --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.danmaku.v1 --add-config retention.ms=604800000
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.gift.v1 --add-config retention.ms=604800000
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.danmaku.v1.dlq --add-config retention.ms=2592000000
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.gift.v1.dlq --add-config retention.ms=2592000000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    command:
+      - "--kafka.server=kafka:19092"
+      - "--topic.filter=live\\..*"
+      - "--group.filter=live-.*"
+    depends_on:
+      kafka: {condition: service_healthy}
+
+  tempo:
+    image: grafana/tempo:2.10.7
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deployments/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports: ["${TEMPO_HOST_PORT:-3200}:3200"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.158.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deployments/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      # Docker Desktop/WSL 常会残留标准 OTLP 端口的转发；宿主机端口允许独立覆盖。
+      - "${OTEL_GRPC_HOST_PORT:-14317}:4317"
+      - "${OTEL_HTTP_HOST_PORT:-14318}:4318"
+    depends_on: [tempo]
+
+  loki:
+    image: grafana/loki:3.7.0
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./deployments/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.19.0
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./deployments/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on: [loki]
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./deployments/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports: ["${ALERTMANAGER_HOST_PORT:-19093}:9093"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  centrifugo:
+    image: centrifugo/centrifugo:v6.9.1
+    command: ["centrifugo", "-c", "/centrifugo-config/centrifugo.json"]
+    volumes:
+      # Mount the containing directory: Docker Desktop's WSL file bind mount
+      # occasionally treats a single-file target as a directory.
+      - ./configs:/centrifugo-config:ro
+    ports: ["8000:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+
+  live-migrate:
+    build: .
+    command: ["live-migrate"]
+    environment:
+      MYSQL_DSN: "root:root@tcp(mysql:3306)/live?parseTime=true&charset=utf8mb4"
+      MIGRATIONS_DIR: "/app/migrations"
+      IDENTITY_MYSQL_APP_PASSWORD: "identity-app"
+      IDENTITY_MYSQL_MIGRATION_PASSWORD: "identity-migrate"
+      IDENTITY_MYSQL_AUDIT_PASSWORD: "identity-audit"
+      ROOM_MYSQL_APP_PASSWORD: "room-app"
+      ROOM_MYSQL_MIGRATION_PASSWORD: "room-migrate"
+      ROOM_MYSQL_AUDIT_PASSWORD: "room-audit"
+      COMMERCE_MYSQL_APP_PASSWORD: "commerce-app"
+      COMMERCE_MYSQL_MIGRATION_PASSWORD: "commerce-migrate"
+      COMMERCE_MYSQL_AUDIT_PASSWORD: "commerce-audit"
+      ARCHIVE_MYSQL_APP_PASSWORD: "archive-app"
+      ARCHIVE_MYSQL_MIGRATION_PASSWORD: "archive-migrate"
+      ARCHIVE_MYSQL_AUDIT_PASSWORD: "archive-audit"
+      QUERY_MYSQL_APP_PASSWORD: "query-app"
+      QUERY_MYSQL_MIGRATION_PASSWORD: "query-migrate"
+      QUERY_MYSQL_AUDIT_PASSWORD: "query-audit"
+      VIDEO_MYSQL_APP_PASSWORD: "video-app"
+      VIDEO_MYSQL_MIGRATION_PASSWORD: "video-migrate"
+      VIDEO_MYSQL_AUDIT_PASSWORD: "video-audit"
+    depends_on:
+      mysql: {condition: service_healthy}
+    restart: "no"
+
+  live-api:
+    build: .
+    command: ["live-api"]
+    environment: *gateway-env
+    ports: ["8080:8080"]
+    depends_on:
+      live-commerce: {condition: service_started}
+      live-interaction: {condition: service_started}
+      live-identity-room: {condition: service_started}
+      live-query: {condition: service_started}
+      live-video: {condition: service_started}
+      otel-collector: {condition: service_started}
+
+  live-query:
+    build: .
+    command: ["live-query"]
+    environment:
+      <<: *app-env
+      QUERY_MYSQL_DSN: "live_query_audit:query-audit@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+
+  live-commerce:
+    build: .
+    command: ["live-commerce"]
+    environment:
+      <<: *app-env
+      COMMERCE_MYSQL_DSN: "live_commerce_app:commerce-app@tcp(mysql:3306)/commerce?parseTime=true&charset=utf8mb4"
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+
+  live-interaction:
+    build: .
+    command: ["live-interaction"]
+    environment: *app-env
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      centrifugo: {condition: service_started}
+      kafka-init: {condition: service_completed_successfully}
+      otel-collector: {condition: service_started}
+
+  live-identity-room:
+    build: .
+    command: ["live-identity-room"]
+    environment:
+      <<: *app-env
+      IDENTITY_MYSQL_DSN: "live_identity_app:identity-app@tcp(mysql:3306)/identity?parseTime=true&charset=utf8mb4"
+      ROOM_MYSQL_DSN: "live_room_app:room-app@tcp(mysql:3306)/room?parseTime=true&charset=utf8mb4"
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      centrifugo: {condition: service_started}
+      otel-collector: {condition: service_started}
+
+  live-video:
+    build: .
+    command: ["live-video"]
+    environment:
+      <<: *app-env
+      VIDEO_MYSQL_DSN: "live_video_app:video-app@tcp(mysql:3306)/video?parseTime=true&charset=utf8mb4"
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      otel-collector: {condition: service_started}
+
+  live-worker:
+    build: .
+    command: ["live-worker"]
+    environment:
+      <<: *app-env
+      COMMERCE_MYSQL_DSN: "live_commerce_app:commerce-app@tcp(mysql:3306)/commerce?parseTime=true&charset=utf8mb4"
+      ARCHIVE_MYSQL_DSN: "live_archive_app:archive-app@tcp(mysql:3306)/archive?parseTime=true&charset=utf8mb4"
+      QUERY_WRITER_MYSQL_DSN: "live_query_app:query-app@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"
+    ports: ["${WORKER_HOST_PORT:-19090}:9090"]
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      centrifugo: {condition: service_started}
+      kafka-init: {condition: service_completed_successfully}
+      otel-collector: {condition: service_started}
+
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployments/prometheus/stage0-alerts.yml:/etc/prometheus/rules/stage0.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["${PROMETHEUS_HOST_PORT:-19091}:9090"]
+    depends_on:
+      - alertmanager
+      - live-api
+      - live-query
+      - live-worker
+      - centrifugo
+      - mysql-exporter
+      - redis-exporter
+      - kafka-exporter
+
+  grafana:
+    image: grafana/grafana:13.0.6
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/platform-overview.json"
+    volumes:
+      - ./deployments/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deployments/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["${GRAFANA_HOST_PORT:-3000}:3000"]
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+volumes:
+  mysql_data:
+  kafka_data:
+  tempo_data:
+  loki_data:
+  alloy_data:
+  alertmanager_data:
+  prometheus_data:
+  grafana_data:

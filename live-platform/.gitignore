@@ -1,0 +1,16 @@
+.env
+deploy/k8s/runtime.env
+*.log
+bin/
+dist/
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+.DS_Store
+reports/
+
+# local deployment credentials / renders
+kubeconfig*
+deployments/k8s/rendered/
+benchmark/raw

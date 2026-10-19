@@ -1,0 +1,366 @@
+package mq
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+)
+
+type Metrics interface {
+	KafkaProduced(topic, result string, duration time.Duration)
+	KafkaProduceFailed(topic, reason string)
+	KafkaConsumed(group, topic, result string)
+	KafkaLag(group, topic string, partition int32, lag int64)
+	KafkaBuffered(client, direction string, records int64)
+}
+
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentError{err: err}
+}
+func IsPermanent(err error) bool { var p permanentError; return errors.As(err, &p) }
+
+type ClientConfig struct {
+	Brokers       []string
+	TLSEnabled    bool
+	SASLMechanism string
+	SASLUsername  string
+	SASLPassword  string
+}
+
+func clientOptions(cfg ClientConfig) ([]kgo.Opt, error) {
+	if len(cfg.Brokers) == 0 {
+		return nil, errors.New("kafka brokers are required")
+	}
+	opts := []kgo.Opt{kgo.SeedBrokers(cfg.Brokers...)}
+	if cfg.TLSEnabled {
+		opts = append(opts, kgo.DialTLS())
+	}
+	switch cfg.SASLMechanism {
+	case "":
+	case "plain":
+		opts = append(opts, kgo.SASL(plain.Auth{User: cfg.SASLUsername, Pass: cfg.SASLPassword}.AsMechanism()))
+	case "scram-sha-256":
+		opts = append(opts, kgo.SASL(scram.Auth{User: cfg.SASLUsername, Pass: cfg.SASLPassword}.AsSha256Mechanism()))
+	case "scram-sha-512":
+		opts = append(opts, kgo.SASL(scram.Auth{User: cfg.SASLUsername, Pass: cfg.SASLPassword}.AsSha512Mechanism()))
+	default:
+		return nil, fmt.Errorf("unsupported kafka SASL mechanism %q", cfg.SASLMechanism)
+	}
+	return opts, nil
+}
+
+type Producer struct {
+	client  *kgo.Client
+	log     *slog.Logger
+	metrics Metrics
+	name    string
+}
+
+func NewProducer(brokers []string, log *slog.Logger, metrics ...Metrics) (*Producer, error) {
+	return NewProducerWithConfig(ClientConfig{Brokers: brokers}, log, metrics...)
+}
+
+func NewProducerWithConfig(cfg ClientConfig, log *slog.Logger, metrics ...Metrics) (*Producer, error) {
+	opts, err := clientOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts,
+		kgo.ClientID("live-producer"),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.ProducerLinger(5*time.Millisecond),
+		kgo.RecordRetries(10),
+		kgo.RecordDeliveryTimeout(10*time.Second),
+		kgo.MaxBufferedRecords(10000),
+	)
+	cl, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	var m Metrics
+	if len(metrics) > 0 {
+		m = metrics[0]
+	}
+	return &Producer{client: cl, log: log, metrics: m, name: "producer"}, nil
+}
+
+func (p *Producer) Close() { p.client.Close() }
+
+func (p *Producer) ProduceSync(ctx context.Context, topic, key string, value []byte) error {
+	return p.produceSync(ctx, topic, key, value, true)
+}
+
+// ProduceRawSync preserves value byte-for-byte for DLQ storage and replay.
+func (p *Producer) ProduceRawSync(ctx context.Context, topic, key string, value []byte) error {
+	return p.produceSync(ctx, topic, key, value, false)
+}
+
+func (p *Producer) produceSync(ctx context.Context, topic, key string, value []byte, injectTrace bool) error {
+	ctx, span := otel.Tracer("live-platform/kafka").Start(ctx, "kafka.produce "+topic, trace.WithSpanKind(trace.SpanKindProducer), trace.WithAttributes(attribute.String("messaging.destination.name", topic)))
+	started := time.Now()
+	if injectTrace {
+		value = InjectTrace(value, ctx)
+	}
+	rec := &kgo.Record{Topic: topic, Key: []byte(key), Value: value}
+	err := p.client.ProduceSync(ctx, rec).FirstErr()
+	result := "success"
+	if err != nil {
+		result = "failed"
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	if p.metrics != nil {
+		p.metrics.KafkaProduced(topic, result, time.Since(started))
+		if err != nil {
+			p.metrics.KafkaProduceFailed(topic, kafkaProduceErrorReason(err))
+		}
+		p.metrics.KafkaBuffered(p.name, "produce", int64(p.client.BufferedProduceRecords()))
+	}
+	span.End()
+	if err != nil {
+		return fmt.Errorf("kafka produce topic=%s: %w", topic, err)
+	}
+	return nil
+}
+
+func (p *Producer) ProduceAsync(ctx context.Context, topic, key string, value []byte) {
+	// The HTTP request context is canceled as soon as the handler returns. franz-go
+	// treats record-context cancellation as permission to fail an already-buffered
+	// record, so request-scoped cancellation must not own this best-effort async
+	// delivery. context.WithoutCancel preserves trace/value propagation while the
+	// producer's RecordDeliveryTimeout still bounds delivery time.
+	ctx = detachedAsyncContext(ctx)
+	ctx, span := otel.Tracer("live-platform/kafka").Start(ctx, "kafka.produce "+topic, trace.WithSpanKind(trace.SpanKindProducer), trace.WithAttributes(attribute.String("messaging.destination.name", topic)))
+	started := time.Now()
+	value = InjectTrace(value, ctx)
+	p.client.TryProduce(ctx, &kgo.Record{Topic: topic, Key: []byte(key), Value: value}, func(r *kgo.Record, err error) {
+		result := "success"
+		if err != nil {
+			result = "failed"
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			if p.log != nil {
+				p.log.ErrorContext(ctx, "kafka async produce failed", "topic", topic, "key", key, "error", err)
+			}
+		}
+		if p.metrics != nil {
+			p.metrics.KafkaProduced(topic, result, time.Since(started))
+			if err != nil {
+				p.metrics.KafkaProduceFailed(topic, kafkaProduceErrorReason(err))
+			}
+			p.metrics.KafkaBuffered(p.name, "produce", int64(p.client.BufferedProduceRecords()))
+		}
+		span.End()
+	})
+}
+
+func detachedAsyncContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
+}
+
+func kafkaProduceErrorReason(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, kgo.ErrMaxBuffered):
+		return "max_buffered"
+	case errors.Is(err, kgo.ErrClientClosed):
+		return "client_closed"
+	default:
+		return "broker_or_other"
+	}
+}
+
+type Record struct {
+	Topic     string
+	Partition int32
+	Offset    int64
+	Key       []byte
+	Value     []byte
+}
+type Handler interface {
+	Handle(context.Context, Record) error
+}
+
+type Consumer struct {
+	client      *kgo.Client
+	log         *slog.Logger
+	group       string
+	metrics     Metrics
+	deadLetters DeadLetterWriter
+}
+
+func NewConsumer(brokers []string, group string, topics []string, log *slog.Logger, metrics ...Metrics) (*Consumer, error) {
+	return NewConsumerWithConfig(ClientConfig{Brokers: brokers}, group, topics, log, metrics...)
+}
+
+func NewConsumerWithConfig(cfg ClientConfig, group string, topics []string, log *slog.Logger, metrics ...Metrics) (*Consumer, error) {
+	if group == "" || len(topics) == 0 {
+		return nil, errors.New("kafka group and topics are required")
+	}
+	opts, err := clientOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts,
+		kgo.ClientID("live-consumer-"+group),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topics...),
+		kgo.DisableAutoCommit(),
+		kgo.BlockRebalanceOnPoll(),
+		kgo.RebalanceTimeout(5*time.Minute),
+		kgo.ConsumeStartOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	cl, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	var m Metrics
+	if len(metrics) > 0 {
+		m = metrics[0]
+	}
+	return &Consumer{client: cl, log: log, group: group, metrics: m}, nil
+}
+
+func (c *Consumer) Close() { c.client.CloseAllowingRebalance() }
+
+func (c *Consumer) WithDeadLetterWriter(writer DeadLetterWriter) *Consumer {
+	c.deadLetters = writer
+	return c
+}
+
+func (c *Consumer) writeDeadLetter(ctx context.Context, record Record, cause error) error {
+	if c.deadLetters == nil {
+		return errors.New("permanent Kafka record cannot be committed without a DLQ writer")
+	}
+	return c.deadLetters.WriteDeadLetter(ctx, NewDeadLetter(c.group, record, cause))
+}
+
+func (c *Consumer) Run(ctx context.Context, h Handler) error {
+	type tp struct {
+		topic     string
+		partition int32
+	}
+	for {
+		fetches := c.client.PollRecords(ctx, 100)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if c.metrics != nil {
+			c.metrics.KafkaBuffered(c.group, "fetch", int64(c.client.BufferedFetchRecords()))
+		}
+		high := make(map[tp]int64)
+		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+			high[tp{p.Topic, p.Partition}] = p.HighWatermark
+		})
+		for _, fe := range fetches.Errors() {
+			if c.log != nil {
+				c.log.WarnContext(ctx, "kafka fetch error", "group", c.group, "topic", fe.Topic, "partition", fe.Partition, "error", fe.Err)
+			}
+			if c.metrics != nil {
+				c.metrics.KafkaConsumed(c.group, fe.Topic, "fetch_error")
+			}
+		}
+		iter := fetches.RecordIter()
+		for !iter.Done() {
+			rec := iter.Next()
+			record := Record{Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset, Key: rec.Key, Value: rec.Value}
+			parent := ContextFromEnvelope(ctx, rec.Value)
+			recCtx, span := otel.Tracer("live-platform/kafka").Start(parent, "kafka.consume "+rec.Topic, trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(
+				attribute.String("messaging.destination.name", rec.Topic),
+				attribute.String("messaging.consumer.group.name", c.group),
+				attribute.Int("messaging.destination.partition.id", int(rec.Partition)),
+				attribute.Int64("messaging.kafka.message.offset", rec.Offset),
+			))
+			result := "success"
+			for {
+				err := h.Handle(recCtx, record)
+				if err == nil {
+					result = "success"
+					break
+				}
+				if IsPermanent(err) {
+					span.RecordError(err)
+					span.SetStatus(codes.Error, err.Error())
+					if dlqErr := c.writeDeadLetter(recCtx, record, err); dlqErr != nil {
+						result = "dlq_error"
+						if c.metrics != nil {
+							c.metrics.KafkaConsumed(c.group, rec.Topic, result)
+						}
+						span.RecordError(dlqErr)
+						span.SetStatus(codes.Error, dlqErr.Error())
+						span.End()
+						c.client.AllowRebalance()
+						return fmt.Errorf("dead-letter group=%s topic=%s partition=%d offset=%d: %w", c.group, rec.Topic, rec.Partition, rec.Offset, dlqErr)
+					}
+					result = "dead_lettered"
+					if c.log != nil {
+						c.log.ErrorContext(recCtx, "dead-lettered permanent kafka record", "group", c.group, "topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "error", err)
+					}
+					break
+				}
+				result = "retry"
+				span.RecordError(err)
+				if c.metrics != nil {
+					c.metrics.KafkaConsumed(c.group, rec.Topic, "retry")
+				}
+				if c.log != nil {
+					c.log.WarnContext(recCtx, "retry kafka record", "group", c.group, "topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "error", err)
+				}
+				select {
+				case <-ctx.Done():
+					span.End()
+					return ctx.Err()
+				case <-time.After(time.Second):
+				}
+			}
+			if err := c.client.CommitRecords(ctx, rec); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				span.End()
+				c.client.AllowRebalance()
+				if c.metrics != nil {
+					c.metrics.KafkaConsumed(c.group, rec.Topic, "commit_error")
+				}
+				return fmt.Errorf("commit group=%s topic=%s partition=%d offset=%d: %w", c.group, rec.Topic, rec.Partition, rec.Offset, err)
+			}
+			if c.metrics != nil {
+				c.metrics.KafkaConsumed(c.group, rec.Topic, result)
+				lag := high[tp{rec.Topic, rec.Partition}] - (rec.Offset + 1)
+				if lag < 0 {
+					lag = 0
+				}
+				c.metrics.KafkaLag(c.group, rec.Topic, rec.Partition, lag)
+			}
+			span.SetAttributes(attribute.String("messaging.process.result", result), attribute.String("messaging.partition", strconv.Itoa(int(rec.Partition))))
+			span.End()
+		}
+		c.client.AllowRebalance()
+	}
+}
