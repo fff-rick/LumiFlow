@@ -23,6 +23,14 @@ scrape_configs:
     static_configs:
       - targets: ["live-video:8085"]
 
+  - job_name: fluxfeed-api
+    static_configs:
+      - targets: ["fluxfeed-api:8080"]
+
+  - job_name: fluxfeed-worker
+    static_configs:
+      - targets: ["fluxfeed-worker:9091"]
+
   - job_name: live-worker
     static_configs:
       - targets: ["live-worker:9090"]

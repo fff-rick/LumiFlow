@@ -36,7 +36,8 @@ func main() {
 	api, err := gateway.New(gateway.Deps{
 		Log: log, Metrics: observability.NewMetrics("live-api"), CommerceURL: cfg.Commerce.BaseURL,
 		InteractionURL: cfg.Interaction.BaseURL, IdentityRoomURL: cfg.IdentityRoom.BaseURL, QueryURL: cfg.Query.BaseURL,
-		VideoURL: cfg.Video.BaseURL,
+		VideoURL: cfg.Video.BaseURL, FluxFeedURL: cfg.Auth.FluxFeedBaseURL, InternalToken: cfg.Auth.InternalToken,
+		BridgeJWTSecret: cfg.Auth.JWTSecret, BridgeTokenTTL: cfg.Auth.TokenTTL,
 	})
 	if err != nil {
 		log.Error("create gateway", "error", err)

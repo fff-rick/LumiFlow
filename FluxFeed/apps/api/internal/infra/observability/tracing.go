@@ -19,8 +19,11 @@ func ConfigureTracing(ctx context.Context, service string) (func(context.Context
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
-	if strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) == "" &&
-		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")) == "" {
+	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
+	if endpoint == "" {
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -31,7 +34,11 @@ func ConfigureTracing(ctx context.Context, service string) (func(context.Context
 	if err != nil {
 		return nil, err
 	}
-	exporter, err := otlptracegrpc.New(ctx)
+	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_INSECURE")), "true") {
+		options = append(options, otlptracegrpc.WithInsecure())
+	}
+	exporter, err := otlptracegrpc.New(ctx, options...)
 	if err != nil {
 		return nil, err
 	}

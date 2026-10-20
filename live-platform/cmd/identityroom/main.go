@@ -74,7 +74,7 @@ func main() {
 	}()
 	tokens := auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL)
 	authService := auth.NewService(auth.NewRepository(identityDB), tokens)
-	h := httpapi.NewIdentityRoom(httpapi.Deps{Log: log, MySQL: databasePingers{identityDB, roomDB}, Redis: redis, Centrifugo: realtime.NewCentrifugo(cfg.Centrifugo.APIURL, cfg.Centrifugo.APIKey, m), Metrics: m, Auth: authService, AppTokens: tokens, CFTokens: cftoken.NewIssuer(cfg.Centrifugo.TokenSecret, cfg.Centrifugo.TokenTTL), CFSubTTL: cfg.Centrifugo.SubscriptionTokenTTL, Rooms: room.NewService(room.NewRepository(roomDB), authService), Stats: stats.NewService(stats.NewRedisStore(redis))})
+	h := httpapi.NewIdentityRoom(httpapi.Deps{Log: log, MySQL: databasePingers{identityDB, roomDB}, Redis: redis, Centrifugo: realtime.NewCentrifugo(cfg.Centrifugo.APIURL, cfg.Centrifugo.APIKey, m), Metrics: m, Auth: authService, AppTokens: tokens, InternalToken: cfg.Auth.InternalToken, CFTokens: cftoken.NewIssuer(cfg.Centrifugo.TokenSecret, cfg.Centrifugo.TokenTTL), CFSubTTL: cfg.Centrifugo.SubscriptionTokenTTL, Rooms: room.NewService(room.NewRepository(roomDB), authService), Stats: stats.NewService(stats.NewRedisStore(redis))})
 	srv := &http.Server{Addr: cfg.IdentityRoom.HTTPAddr, Handler: h, ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}
 	ch := make(chan error, 1)
 	go func() {

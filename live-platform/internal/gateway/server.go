@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -26,12 +27,17 @@ type Deps struct {
 	IdentityRoomURL string
 	QueryURL        string
 	VideoURL        string
+	FluxFeedURL     string
+	InternalToken   string
+	BridgeJWTSecret string
+	BridgeTokenTTL  time.Duration
 }
 
 type Server struct {
 	log     *slog.Logger
 	metrics *observability.Metrics
 	mux     *http.ServeMux
+	bridge  *fluxFeedBridge
 }
 
 func New(d Deps) (*Server, error) {
@@ -39,6 +45,11 @@ func New(d Deps) (*Server, error) {
 		return nil, errors.New("gateway logger is required")
 	}
 	s := &Server{log: d.Log, metrics: d.Metrics, mux: http.NewServeMux()}
+	bridge, err := newFluxFeedBridge(d)
+	if err != nil {
+		return nil, err
+	}
+	s.bridge = bridge
 	identity, err := s.proxy("identity-room", d.IdentityRoomURL, "IDENTITY_ROOM_UNAVAILABLE")
 	if err != nil {
 		return nil, err
@@ -59,7 +70,14 @@ func New(d Deps) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.routes(identity, interaction, commerce, query, video)
+	var fluxContent http.Handler
+	if strings.TrimSpace(d.FluxFeedURL) != "" {
+		fluxContent, err = s.fluxContentProxy(d.FluxFeedURL)
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.routes(identity, interaction, commerce, query, video, fluxContent)
 	return s, nil
 }
 
@@ -81,7 +99,40 @@ func (s *Server) proxy(name, rawURL, errorCode string) (http.Handler, error) {
 	return proxy, nil
 }
 
-func (s *Server) routes(identity, interaction, commerce, query, video http.Handler) {
+// fluxContentProxy exposes FluxFeed as LUMI's video microservice. It
+// deliberately preserves the FluxFeed access token: replacing it with the
+// internal live token would make FluxFeed reject video requests.
+func (s *Server) fluxContentProxy(rawURL string) (http.Handler, error) {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		return nil, fmt.Errorf("invalid fluxfeed upstream URL %q", rawURL)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		path := r.URL.Path
+		director(r)
+		switch {
+		case path == "/api/v1/content-assets":
+			// Upload stays behind LUMI's public API, but FluxFeed remains the
+			// only owner of media-asset validation and storage metadata.
+			r.URL.Path = "/api/uploads"
+		case strings.HasPrefix(path, "/api/v1/content-assets/"):
+			r.URL.Path = "/uploads/" + strings.TrimPrefix(path, "/api/v1/content-assets/")
+		default:
+			r.URL.Path = "/api" + strings.TrimPrefix(path, "/api/v1")
+		}
+		r.URL.RawPath = ""
+		r.Header.Del("X-User-ID")
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		s.log.ErrorContext(r.Context(), "upstream proxy failed", "upstream", "fluxfeed-content", "error", err)
+		writeError(w, http.StatusBadGateway, "FLUXFEED_UNAVAILABLE", "video content service unavailable")
+	}
+	return proxy, nil
+}
+
+func (s *Server) routes(identity, interaction, commerce, query, video, fluxContent http.Handler) {
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "milestone": "M8"})
 	})
@@ -92,50 +143,156 @@ func (s *Server) routes(identity, interaction, commerce, query, video http.Handl
 		s.mux.Handle("GET /metrics", s.metrics.Handler())
 	}
 
-	s.mux.Handle("POST /api/v1/auth/register", identity)
-	s.mux.Handle("POST /api/v1/auth/login", identity)
-	s.mux.Handle("GET /api/v1/me", identity)
-	s.mux.Handle("POST /api/v1/realtime/token", identity)
-	s.mux.Handle("POST /api/v1/rooms", identity)
+	s.mux.Handle("POST /api/v1/auth/register", s.authEndpoint(identity, true))
+	s.mux.Handle("POST /api/v1/auth/login", s.authEndpoint(identity, false))
+	s.mux.Handle("GET /api/v1/me", s.protected(identity))
+	s.mux.Handle("POST /api/v1/realtime/token", s.protected(identity))
+	s.mux.Handle("POST /api/v1/rooms", s.protected(identity))
 	s.mux.Handle("GET /api/v1/rooms", identity)
 	s.mux.Handle("GET /api/v1/rooms/{room_id}", identity)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/start", identity)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/stop", identity)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/mutes", identity)
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/mutes", identity)
-	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", identity)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/bans", identity)
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/bans", identity)
-	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", identity)
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/start", s.protected(identity))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/stop", s.protected(identity))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/mutes", s.protected(identity))
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/mutes", s.protected(identity))
+	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.protected(identity))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/bans", s.protected(identity))
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/bans", s.protected(identity))
+	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.protected(identity))
 
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/join", interaction)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/leave", interaction)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/danmaku", interaction)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/like", interaction)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/heartbeat", interaction)
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/join", s.protected(interaction))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/leave", s.protected(interaction))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/danmaku", s.protected(interaction))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/like", s.protected(interaction))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/heartbeat", s.protected(interaction))
 
 	s.mux.Handle("GET /api/v1/gifts", commerce)
-	s.mux.Handle("GET /api/v1/wallet", commerce)
-	s.mux.Handle("GET /api/v1/wallet/transactions", commerce)
-	s.mux.Handle("POST /api/v1/wallet/dev-credit", commerce)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/gifts", commerce)
-	s.mux.Handle("GET /api/v1/gift-orders/{order_no}", commerce)
+	s.mux.Handle("GET /api/v1/wallet", s.protected(commerce))
+	s.mux.Handle("GET /api/v1/wallet/transactions", s.protected(commerce))
+	s.mux.Handle("POST /api/v1/wallet/dev-credit", s.protected(commerce))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/gifts", s.protected(commerce))
+	s.mux.Handle("GET /api/v1/gift-orders/{order_no}", s.protected(commerce))
 
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/messages", query)
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/top-viewers", query)
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/viewers", query)
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/stats", query)
 
-	s.mux.Handle("POST /api/v1/videos", video)
-	s.mux.Handle("GET /api/v1/videos/{video_id}", video)
-	s.mux.Handle("DELETE /api/v1/videos/{video_id}", video)
-	s.mux.Handle("GET /api/v1/users/me/videos", video)
-	s.mux.Handle("GET /api/v1/users/{user_id}/videos", video)
+	videoAPI := video
+	protectedVideoAPI := s.protected(video)
+	if fluxContent != nil {
+		videoAPI = fluxContent
+		protectedVideoAPI = fluxContent
+		s.mux.Handle("POST /api/v1/content-assets", fluxContent)
+		s.mux.Handle("GET /api/v1/feed-items", fluxContent)
+		s.mux.Handle("PUT /api/v1/videos/{video_id}/like", fluxContent)
+		s.mux.Handle("DELETE /api/v1/videos/{video_id}/like", fluxContent)
+		s.mux.Handle("GET /api/v1/content-assets/{asset...}", fluxContent)
+	}
+	s.mux.Handle("POST /api/v1/videos", protectedVideoAPI)
+	s.mux.Handle("GET /api/v1/videos/{video_id}", videoAPI)
+	s.mux.Handle("DELETE /api/v1/videos/{video_id}", protectedVideoAPI)
+	s.mux.Handle("GET /api/v1/users/me/videos", protectedVideoAPI)
+	s.mux.Handle("GET /api/v1/users/{user_id}/videos", videoAPI)
 
 	for _, pattern := range []string{"GET /internal/", "POST /internal/", "PUT /internal/", "PATCH /internal/", "DELETE /internal/"} {
 		s.mux.HandleFunc(pattern, http.NotFound)
 	}
 	s.mux.Handle("GET /", webui.Handler())
+}
+
+func (s *Server) authEndpoint(legacy http.Handler, register bool) http.Handler {
+	if s.bridge == nil {
+		return legacy
+	}
+	if register {
+		return http.HandlerFunc(s.register)
+	}
+	return http.HandlerFunc(s.login)
+}
+
+type registerRequest struct {
+	Account  string `json:"account"`
+	Password string `json:"password"`
+	Nickname string `json:"nickname"`
+}
+
+type loginRequest struct {
+	Account  string `json:"account"`
+	Password string `json:"password"`
+}
+
+func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	var request registerRequest
+	if err := decodeAuthJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	response, err := s.bridge.register(r.Context(), request.Account, request.Password, request.Nickname)
+	if err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var request loginRequest
+	if err := decodeAuthJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	response, err := s.bridge.login(r.Context(), request.Account, request.Password)
+	if err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) protected(next http.Handler) http.Handler {
+	if s.bridge == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(header, "Bearer ") {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer token")
+			return
+		}
+		liveToken, err := s.bridge.liveToken(r.Context(), strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")))
+		if err != nil {
+			s.writeAuthError(w, err)
+			return
+		}
+		r.Header.Set("Authorization", "Bearer "+liveToken)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) writeAuthError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errFluxFeedUnauthorized) {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid FluxFeed access token")
+		return
+	}
+	var upstream *fluxFeedHTTPError
+	if errors.As(err, &upstream) && upstream.status >= 400 && upstream.status < 500 {
+		writeError(w, upstream.status, "AUTH_FAILED", upstream.message)
+		return
+	}
+	s.log.Error("FluxFeed authentication bridge failed", "error", err)
+	writeError(w, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE", "authentication service unavailable")
+}
+
+func decodeAuthJSON(r *http.Request, output any) error {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 16<<10+1))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); err != nil {
+		return errors.New("invalid JSON request")
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("request body must contain one JSON object")
+	}
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {

@@ -41,6 +41,7 @@ type GatewayConfig struct {
 	IdentityRoom  IdentityRoomConfig
 	Query         QueryConfig
 	Video         VideoConfig
+	Auth          AuthConfig
 	Observability ObservabilityConfig
 }
 
@@ -88,8 +89,10 @@ type CentrifugoConfig struct {
 	SubscriptionTokenTTL time.Duration
 }
 type AuthConfig struct {
-	JWTSecret string
-	TokenTTL  time.Duration
+	JWTSecret       string
+	TokenTTL        time.Duration
+	FluxFeedBaseURL string
+	InternalToken   string
 }
 type DanmakuConfig struct {
 	SensitiveWords []string
@@ -169,6 +172,10 @@ func LoadGateway() (GatewayConfig, error) {
 	if err != nil {
 		return GatewayConfig{}, err
 	}
+	tokenTTL, err := time.ParseDuration(env("AUTH_TOKEN_TTL", "24h"))
+	if err != nil || tokenTTL <= 0 {
+		return GatewayConfig{}, fmt.Errorf("AUTH_TOKEN_TTL must be a positive duration")
+	}
 	return GatewayConfig{
 		HTTP:          HTTPConfig{Addr: env("HTTP_ADDR", ":8080")},
 		Commerce:      CommerceConfig{BaseURL: env("COMMERCE_BASE_URL", "http://localhost:8081")},
@@ -176,6 +183,7 @@ func LoadGateway() (GatewayConfig, error) {
 		IdentityRoom:  IdentityRoomConfig{BaseURL: env("IDENTITY_ROOM_BASE_URL", "http://localhost:8083")},
 		Query:         QueryConfig{BaseURL: env("QUERY_BASE_URL", "http://localhost:8084")},
 		Video:         VideoConfig{BaseURL: env("VIDEO_BASE_URL", "http://localhost:8085")},
+		Auth:          AuthConfig{JWTSecret: env("AUTH_JWT_SECRET", "dev-app-jwt-secret-change-me"), TokenTTL: tokenTTL, FluxFeedBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FLUXFEED_BASE_URL")), "/"), InternalToken: strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))},
 		Observability: observability,
 	}, nil
 }
@@ -457,7 +465,7 @@ func Load() (Config, error) {
 			TokenTTL:             cfTTL,
 			SubscriptionTokenTTL: subTTL,
 		},
-		Auth:       AuthConfig{JWTSecret: env("AUTH_JWT_SECRET", "dev-app-jwt-secret-change-me"), TokenTTL: authTTL},
+		Auth:       AuthConfig{JWTSecret: env("AUTH_JWT_SECRET", "dev-app-jwt-secret-change-me"), TokenTTL: authTTL, FluxFeedBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FLUXFEED_BASE_URL")), "/"), InternalToken: strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))},
 		Danmaku:    DanmakuConfig{SensitiveWords: words, UserRateLimit: danmakuUserRateLimit, UserRateWindow: danmakuUserRateWindow},
 		Like:       LikeConfig{UserRateLimit: likeUserRateLimit, UserRateWindow: likeUserRateWindow, RoomCacheTTL: likeRoomCacheTTL, BanCacheTTL: likeBanCacheTTL},
 		Gift:       GiftConfig{MaxCountPerRequest: giftMaxCount, UserRateLimit: giftUserRateLimit, UserRateWindow: giftUserRateWindow},
