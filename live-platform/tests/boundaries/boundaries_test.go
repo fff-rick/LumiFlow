@@ -132,7 +132,7 @@ func TestARCH003And004ServiceImportBoundaries(t *testing.T) {
 func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 	root := repositoryRoot(t)
 	allowed := map[string]map[string]bool{
-		"auth":       set("users"),
+		"auth":       set("users", "external_identities"),
 		"room":       set("live_rooms", "live_sessions", "room_bans", "room_mutes"),
 		"gift":       set("gifts", "gift_orders", "wallets", "wallet_transactions", "outbox_events"),
 		"wallet":     set("wallets", "wallet_transactions"),
@@ -142,7 +142,7 @@ func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 		"outbox":     set("outbox_events"),
 		"httpapi":    set("room_message_feed"),
 		"querymodel": set("user_display_projection"),
-		"videoapi":    set("videos", "video_stats"),
+		"videoapi":   set("videos", "video_stats"),
 	}
 	schemaTables := set("room_message_feed", "user_display_projection")
 	createPattern := regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)`)

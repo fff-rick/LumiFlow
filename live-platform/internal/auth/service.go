@@ -22,6 +22,10 @@ type UserRepository interface {
 	ByID(context.Context, int64) (User, error)
 }
 
+type ExternalUserRepository interface {
+	SyncExternal(context.Context, ExternalUser) (User, error)
+}
+
 type Service struct {
 	repo   UserRepository
 	tokens *TokenManager
@@ -88,6 +92,16 @@ func (s *Service) Login(ctx context.Context, username, password string) (AuthRes
 }
 
 func (s *Service) User(ctx context.Context, id int64) (User, error) { return s.repo.ByID(ctx, id) }
+
+// SyncExternalUser creates or refreshes the local display projection of a
+// user authenticated by the platform identity provider.
+func (s *Service) SyncExternalUser(ctx context.Context, user ExternalUser) (User, error) {
+	repo, ok := s.repo.(ExternalUserRepository)
+	if !ok {
+		return User{}, errors.New("external user sync is unavailable")
+	}
+	return repo.SyncExternal(ctx, user)
+}
 
 func (s *Service) Nickname(ctx context.Context, id int64) (string, bool, error) {
 	u, err := s.repo.ByID(ctx, id)

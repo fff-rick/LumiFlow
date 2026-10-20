@@ -34,6 +34,8 @@ const state = {
   currentRoute: location.pathname,
   seenEvents: new Set(),
   seenMessages: new Set(),
+  videoFeed: { scene: 'timeline', status: 'idle', items: [], error: '' },
+  homeVideoFeed: { scene: 'timeline', status: 'idle', items: [], error: '' },
 };
 
 const roomThemes = ['chat','game','life','music','outside'].map(name => ({
@@ -105,7 +107,7 @@ function userAvatar(user, className='avatar'){
 function header(){
   return `<header class="topbar">
     <a class="logo" href="/" data-nav><img src="/front_con/logo/project.png" alt="LUMI LIVE"></a>
-    <nav class="nav"><a class="${state.currentRoute==='/'?'active':''}" href="/" data-nav><img src="/front_con/icon/hoem.png" alt="">直播首页</a><a class="${state.currentRoute==='/studio'?'active':''}" href="/studio" data-nav><img src="/front_con/icon/more.png" alt="">直播中心</a></nav>
+    <nav class="nav"><a class="${state.currentRoute==='/'?'active':''}" href="/" data-nav><img src="/front_con/icon/hoem.png" alt="">直播首页</a><a class="${state.currentRoute==='/videos'?'active':''}" href="/videos" data-nav>短视频</a><a class="${state.currentRoute==='/studio'?'active':''}" href="/studio" data-nav><img src="/front_con/icon/more.png" alt="">直播中心</a></nav>
     <div class="search"><input id="room-search" placeholder="搜索直播标题或主播"><button id="search-btn">⌕</button></div>
     <div class="top-spacer"></div>
     <div class="user-actions">
@@ -118,8 +120,19 @@ function homeTemplate(){
   const cards = state.rooms.length ? state.rooms.map((r,i)=>roomCard(r,i)).join('') : `<div class="empty" style="grid-column:1/-1"><strong>还没有正在直播的房间</strong>登录后点击「开播」创建你的第一个直播间。<div style="margin-top:18px"><button class="btn primary" id="empty-create">立即开播</button></div></div>`;
   return `<div class="shell">${header()}
     <section class="hero"><div class="hero-card"><div class="hero-copy"><span class="eyebrow">WELCOME TO</span><h1>LUMI LIVE</h1><p>To show your beautiful life!</p></div><div class="hero-orb"></div></div></section>
-    <main class="content"><div class="section-head"><div class="section-title"><img class="section-icon" src="/front_con/icon/hot.png" alt=""><h2>正在直播</h2></div><button class="btn ghost small" id="refresh-rooms">↻ 刷新</button></div><div class="room-grid" id="room-grid">${cards}</div></main>
+    <main class="content"><div class="section-head"><div class="section-title"><img class="section-icon" src="/front_con/icon/hot.png" alt=""><h2>正在直播</h2></div><button class="btn ghost small" id="refresh-rooms">↻ 刷新</button></div><div class="room-grid" id="room-grid">${cards}</div>${homeVideoModule()}</main>
   </div>`;
+}
+
+function homeVideoModule(){
+  const feed=state.homeVideoFeed;
+  const tabs=videoFeedScenes.map(([key,label])=>`<button class="home-video-tab ${feed.scene===key?'active':''}" data-home-video-scene="${key}">${label}</button>`).join('');
+  let body='';
+  if(feed.status==='loading'||feed.status==='idle') body='<div class="home-video-message">短视频加载中…</div>';
+  else if(feed.status==='error') body=`<div class="home-video-message"><span>${esc(feed.error||'短视频暂不可用')}</span><button class="btn ghost small" id="home-video-retry">重试</button></div>`;
+  else if(!feed.items.length) body='<div class="home-video-message">暂无短视频，去发布第一个作品吧。</div>';
+  else body=`<div class="video-grid home-video-grid">${feed.items.slice(0,4).map(videoCard).join('')}</div>`;
+  return `<section class="home-video-module"><div class="section-head"><div><div class="section-title"><span class="dot"></span><h2>精彩短视频</h2></div><div class="section-sub">来自 FluxFeed 的精选内容</div></div><a class="btn ghost small" href="/videos" data-nav>查看全部 →</a></div><div class="home-video-tabs">${tabs}</div><div id="home-video-content">${body}</div></section>`;
 }
 function roomCard(r,i){
   const theme=roomTheme(r.room_id,i);
@@ -195,9 +208,11 @@ async function renderApp(){
     else if(state.user && state.room.status==='LIVING' && !state.centrifuge) await connectRoom(id);
   } else if(state.currentRoute==='/studio'){
     app.innerHTML=studioTemplate(); bindCommon(); bindStudio();
+  } else if(state.currentRoute==='/videos'){
+    app.innerHTML=videoFeedTemplate(); bindCommon(); bindVideoFeed(); await loadVideoFeed();
   } else {
     app.innerHTML=homeTemplate(); bindCommon(); bindHome();
-    await loadRooms();
+    await Promise.all([loadRooms(),loadHomeVideoFeed()]);
   }
   renderOverlay();
 }
@@ -217,6 +232,7 @@ function bindHome(){
   document.getElementById('refresh-rooms')?.addEventListener('click',loadRooms);
   document.getElementById('empty-create')?.addEventListener('click',()=>state.user?navigate('/studio'):openAuth('login'));
   document.querySelectorAll('.room-card').forEach(c=>c.addEventListener('click',()=>navigate(`/room/${c.dataset.room}`)));
+  bindHomeVideoFeed();
 }
 function bindStudio(){
   document.getElementById('studio-login')?.addEventListener('click',()=>openAuth('login'));
@@ -451,6 +467,144 @@ function showGiftError(error){
   if(error?.code==='GIFT_REQUEST_STORAGE'){toast(error.message,'error');return}
   if(isDefinitiveGiftError(error)){toast(error.message,'error');return}
   toast('送礼结果尚未确认，再次提交相同礼物将安全重试','error');
+}
+
+const videoFeedScenes = [
+  ['timeline', '最新'], ['recommend', '发现'], ['following', '关注'], ['hot', '热门'],
+];
+
+function videoFeedTemplate(){
+  const feed=state.videoFeed;
+  const tabs=videoFeedScenes.map(([key,label])=>`<button class="video-feed-tab ${feed.scene===key?'active':''}" data-video-scene="${key}">${label}</button>`).join('');
+  let body='';
+  if(feed.status==='loading'||feed.status==='idle') body='<div class="video-feed-message">正在加载 FluxFeed 视频…</div>';
+  else if(feed.status==='error') body=`<div class="video-feed-message"><strong>${esc(feed.error||'视频加载失败')}</strong><button class="btn primary small" id="video-feed-retry">重新加载</button></div>`;
+  else if(!feed.items.length) body='<div class="video-feed-message">这里还没有视频，稍后再来看看。</div>';
+  else body=`<div class="video-grid">${feed.items.map(videoCard).join('')}</div>`;
+  return `<div class="shell">${header()}<main class="content video-feed-page"><section class="video-feed-hero"><div><span class="eyebrow">LUMI × FLUXFEED</span><h1>发现此刻，连接热爱</h1><p>短视频内容与直播互动，现在在同一个平台。</p></div><a class="btn primary" href="/studio" data-nav>去开播</a></section><section class="video-feed-section"><div class="video-feed-tabs">${tabs}</div>${body}</section></main></div>`;
+}
+
+function videoCard(video){
+  const cover=contentAssetURL(video.cover_url||video.media_url);
+  const title=esc(video.title||'FluxFeed 视频');
+  const author=esc(video.author||video.author_nickname||`创作者 #${video.author_id||''}`);
+  const liked=Boolean(video.viewer_liked);
+  return `<article class="video-card"><button class="video-card-cover" data-video-open="${Number(video.video_id)}" aria-label="播放 ${title}">${cover?`<img src="${esc(cover)}" alt="">`:''}<span class="video-card-play">▶</span><span class="video-card-duration">${fmtNum(video.view_count||0)} 次播放</span></button><div class="video-card-copy"><strong>${title}</strong><span>${author}</span><div class="video-card-actions"><button class="video-like ${liked?'active':''}" data-video-like="${Number(video.video_id)}" ${state.user?'':'disabled'}>♥ ${fmtNum(video.like_count||0)}</button><button class="video-open" data-video-open="${Number(video.video_id)}">观看</button></div></div></article>`;
+}
+
+async function loadHomeVideoFeed(){
+  const feed=state.homeVideoFeed;
+  const scene=feed.scene;
+  feed.status='loading'; feed.error=''; renderHomeVideoFeed();
+  try{
+    const params=new URLSearchParams({scene,limit:'4'});
+    const data=await api(`/api/v1/feed-items?${params}`);
+    if(scene!==feed.scene)return;
+    feed.items=Array.isArray(data.items)?data.items:[];
+    feed.status='ready';
+  }catch(error){
+    if(scene!==feed.scene)return;
+    feed.items=[]; feed.status='error'; feed.error=error.message;
+  }
+  renderHomeVideoFeed();
+}
+
+function renderHomeVideoFeed(){
+  if(state.currentRoute!=='/')return;
+  const module=document.querySelector('.home-video-module');
+  if(!module)return;
+  module.outerHTML=homeVideoModule();
+  bindHomeVideoFeed();
+}
+
+function bindHomeVideoFeed(){
+  document.querySelector('.home-video-module [data-nav]')?.addEventListener('click',event=>{
+    event.preventDefault(); navigate(event.currentTarget.getAttribute('href'));
+  });
+  document.querySelectorAll('[data-home-video-scene]').forEach(button=>button.addEventListener('click',()=>{
+    const scene=button.dataset.homeVideoScene;
+    if(scene===state.homeVideoFeed.scene)return;
+    state.homeVideoFeed.scene=scene; loadHomeVideoFeed();
+  }));
+  document.getElementById('home-video-retry')?.addEventListener('click',loadHomeVideoFeed);
+  bindVideoCards(state.homeVideoFeed);
+}
+
+async function loadVideoFeed(){
+  const feed=state.videoFeed;
+  const scene=feed.scene;
+  feed.status='loading'; feed.error=''; renderVideoFeed();
+  try{
+    const params=new URLSearchParams({scene,limit:'24'});
+    const data=await api(`/api/v1/feed-items?${params}`);
+    if(scene!==feed.scene)return;
+    feed.items=Array.isArray(data.items)?data.items:[];
+    feed.status='ready';
+  }catch(error){
+    if(scene!==feed.scene)return;
+    feed.items=[]; feed.status='error'; feed.error=error.message;
+  }
+  renderVideoFeed();
+}
+
+function renderVideoFeed(){
+  if(state.currentRoute!=='/videos')return;
+  app.innerHTML=videoFeedTemplate(); bindCommon(); bindVideoFeed();
+}
+
+function bindVideoFeed(){
+  document.querySelectorAll('[data-video-scene]').forEach(button=>button.addEventListener('click',()=>{
+    const scene=button.dataset.videoScene;
+    if(scene===state.videoFeed.scene)return;
+    state.videoFeed.scene=scene; loadVideoFeed();
+  }));
+  document.getElementById('video-feed-retry')?.addEventListener('click',loadVideoFeed);
+  bindVideoCards(state.videoFeed);
+}
+
+function bindVideoCards(feed){
+  document.querySelectorAll('[data-video-open]').forEach(button=>button.addEventListener('click',()=>{
+    const video=feed.items.find(item=>Number(item.video_id)===Number(button.dataset.videoOpen));
+    if(video)openVideo(video);
+  }));
+  document.querySelectorAll('[data-video-like]').forEach(button=>button.addEventListener('click',()=>toggleVideoLike(Number(button.dataset.videoLike))));
+}
+
+async function toggleVideoLike(videoID){
+  if(!state.user){openAuth('login');return}
+  const video=[...state.videoFeed.items,...state.homeVideoFeed.items].find(item=>Number(item.video_id)===videoID);
+  if(!video)return;
+  const liked=Boolean(video.viewer_liked);
+  try{
+    const result=await api(`/api/v1/videos/${videoID}/like`,{method:liked?'DELETE':'PUT',headers:{'Idempotency-Key':`web-video-like-${videoID}-${Date.now()}`}});
+    for(const feed of [state.videoFeed,state.homeVideoFeed]){
+      const item=feed.items.find(candidate=>Number(candidate.video_id)===videoID);
+      if(item){item.viewer_liked=Boolean(result.active);item.like_count=result.like_count??item.like_count;}
+    }
+    renderVideoFeed(); renderHomeVideoFeed();
+  }catch(error){toast(error.message,'error')}
+}
+
+function openVideo(video){
+  const source=contentAssetURL(video.media_url);
+  if(!source){toast('该视频暂时无法播放','error');return}
+  const cover=contentAssetURL(video.cover_url||video.media_url);
+  const modal=document.createElement('div');
+  modal.className='video-player-backdrop';
+  modal.innerHTML=`<section class="video-player" role="dialog" aria-modal="true" aria-label="${esc(video.title||'视频播放')}"><button class="video-player-close" aria-label="关闭">×</button><video src="${esc(source)}" ${cover?`poster="${esc(cover)}"`:''} controls autoplay playsinline></video><div><strong>${esc(video.title||'FluxFeed 视频')}</strong><p>${esc(video.description||'')}</p></div></section>`;
+  modal.addEventListener('click',event=>{if(event.target===modal)modal.remove()});
+  modal.querySelector('.video-player-close').addEventListener('click',()=>modal.remove());
+  document.body.appendChild(modal);
+}
+
+function contentAssetURL(value){
+  if(!value)return '';
+  try{
+    const url=new URL(value,location.origin);
+    if(!['http:','https:'].includes(url.protocol))return '';
+    if(url.origin===location.origin&&url.pathname.startsWith('/uploads/')) return `/api/v1/content-assets${url.pathname.slice('/uploads'.length)}${url.search}`;
+    return url.href;
+  }catch{return ''}
 }
 
 window.addEventListener('beforeunload',()=>{leaveCurrentRoom();disconnectRealtime();});

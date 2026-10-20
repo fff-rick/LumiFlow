@@ -14,3 +14,10 @@ func TestPasswordHashAndVerify(t *testing.T) {
 		t.Fatal("wrong password verified")
 	}
 }
+
+func TestLimitRunesPreservesUnicodeBoundary(t *testing.T) {
+	value := "直播互动用户"
+	if got := limitRunes(value, 4); got != "直播互动" {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -1,0 +1,138 @@
+# Run with: docker compose -f docker-compose.yml -f docker-compose.integration.yml -p lumiflow up --build
+# This file adds FluxFeed to the LUMI network. FluxFeed keeps its own MySQL and
+# Redis, while both applications use the platform Kafka and observability stack.
+services:
+  # Keep P2 runnable beside an existing standalone LUMI Compose project.
+  mysql:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  kafka:
+    ports: !reset []
+
+  tempo:
+    ports: !reset []
+
+  otel-collector:
+    ports: !reset []
+
+  centrifugo:
+    ports: !reset []
+
+  alertmanager:
+    ports: !reset []
+
+  live-worker:
+    ports: !reset []
+
+  prometheus:
+    ports: !reset []
+    depends_on:
+      fluxfeed-api: {condition: service_healthy}
+
+  grafana:
+    ports: !reset []
+
+  fluxfeed-mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: fluxfeed-root
+      MYSQL_DATABASE: FluxFeed
+      MYSQL_USER: fluxfeed
+      MYSQL_PASSWORD: fluxfeed-password
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pfluxfeed-root"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - fluxfeed_mysql_data:/var/lib/mysql
+
+  fluxfeed-redis:
+    image: redis:7.4-alpine
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: fluxfeed-redis-password
+      REDISCLI_AUTH: fluxfeed-redis-password
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - fluxfeed_redis_data:/data
+
+  fluxfeed-kafka-init:
+    image: apache/kafka:4.3.1
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for topic in fluxfeed.video fluxfeed.interaction fluxfeed.exposure fluxfeed.relation; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic "$$topic" --partitions 6 --replication-factor 1
+        done
+
+  fluxfeed-api:
+    build:
+      context: ../FluxFeed/apps/api
+      dockerfile: Dockerfile
+    environment: &fluxfeed-env
+      FLUXFEED_ENV: development
+      FLUXFEED_JWT_SECRET: fluxfeed-development-jwt-secret-1234567890
+      FLUXFEED_INTERNAL_TOKEN: fluxfeed-development-internal-token-123456
+      ADMIN: admin@lumiflow.test
+      ADMIN_PW: AdminPassword123!
+      FLUXFEED_DATABASE_HOST: fluxfeed-mysql
+      FLUXFEED_DATABASE_USER: fluxfeed
+      FLUXFEED_DATABASE_PASSWORD: fluxfeed-password
+      FLUXFEED_REDIS_ADDR: fluxfeed-redis:6379
+      FLUXFEED_REDIS_PASSWORD: fluxfeed-redis-password
+      FLUXFEED_KAFKA_BROKERS: kafka:19092
+      FLUXFEED_PUBLIC_URL: http://localhost:8080
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+    volumes:
+      - ../FluxFeed/apps/api/configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - fluxfeed_uploads:/app/uploads
+    depends_on:
+      fluxfeed-mysql: {condition: service_healthy}
+      fluxfeed-redis: {condition: service_healthy}
+      fluxfeed-kafka-init: {condition: service_completed_successfully}
+      otel-collector: {condition: service_started}
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  fluxfeed-worker:
+    build:
+      context: ../FluxFeed/apps/api
+      dockerfile: Dockerfile
+    command: ["./fluxfeed-worker"]
+    environment: *fluxfeed-env
+    volumes:
+      - ../FluxFeed/apps/api/configs/config.docker.yaml:/app/configs/config.yaml:ro
+    depends_on:
+      fluxfeed-mysql: {condition: service_healthy}
+      fluxfeed-redis: {condition: service_healthy}
+      fluxfeed-kafka-init: {condition: service_completed_successfully}
+      otel-collector: {condition: service_started}
+
+  live-api:
+    environment:
+      FLUXFEED_BASE_URL: http://fluxfeed-api:8080
+    ports: !override ["${LUMIFLOW_API_PORT:-18080}:8080"]
+    depends_on:
+      fluxfeed-api: {condition: service_healthy}
+      fluxfeed-worker: {condition: service_started}
+
+volumes:
+  fluxfeed_mysql_data:
+  fluxfeed_redis_data:
+  fluxfeed_uploads:

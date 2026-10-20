@@ -25,12 +25,19 @@
 | GET | `/gift-orders/{order_no}` | 必需 | 钱包-礼物服务 |
 | POST/DELETE | `/rooms/{room_id}/mutes`、`/mutes/{user_id}` | 必需 | 账户-房间服务 |
 | POST/DELETE | `/rooms/{room_id}/bans`、`/bans/{user_id}` | 必需 | 账户-房间服务 |
+| POST | `/content-assets` | 必需；`multipart/form-data` | FluxFeed 视频服务 |
+| POST | `/videos` | 必需；建议携带 `Idempotency-Key` | FluxFeed 视频服务 |
+| GET/DELETE | `/videos/{video_id}` | GET 公开；DELETE 必需 | FluxFeed 视频服务 |
+| GET | `/users/me/videos`、`/users/{user_id}/videos` | 前者必需；后者公开 | FluxFeed 视频服务 |
+| GET | `/feed-items`、`/content-assets/{asset...}` | 公开 | FluxFeed 视频服务 |
+| PUT/DELETE | `/videos/{video_id}/like` | 必需；必须携带 `Idempotency-Key` | FluxFeed 视频服务 |
 
 ## 迁移要求
 
-- Gateway 必须保留以上 URI、方法、认证、请求头及状态码；内部服务地址不暴露给浏览器。
+- Gateway 必须保留以上 URI、方法和认证；内部服务地址不暴露给浏览器。
 - 送礼请求的 `Idempotency-Key` 在整个迁移期间保持原有去重范围与冲突语义；不得因路由切换产生重复扣款。
 - 实时令牌与订阅令牌的 JWT claim 和失效时间在客户端升级完成前不得改变。
 - 新增字段应为可选字段。字段改名、JSON number/string 互换、将同步成功改为异步受理都属于破坏性变更。
+- 视频路由由 FluxFeed 原生实现：发布和修改审核状态可返回 `202 Accepted`，错误体为 FluxFeed 的 `{ "error": "..." }`；客户端不得依赖旧 `live-video` 的状态码或错误码。
 
 响应示例与业务错误码以 `internal/httpapi/server.go` 及其测试为实现基线；每次改变该文件的外部响应前，必须同步修改本契约并新增对应测试。

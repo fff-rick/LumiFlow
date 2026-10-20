@@ -11,3 +11,13 @@ type User struct {
 	Status       int       `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
 }
+
+// ExternalUser is the minimal profile mirrored from the platform identity
+// provider. It never carries a password or an access token.
+type ExternalUser struct {
+	Provider string
+	Subject  string
+	Username string
+	Nickname string
+	Avatar   string
+}

@@ -11,7 +11,7 @@ import (
 
 func TestHandlerServesSPAAndAssets(t *testing.T) {
 	h := Handler()
-	for _, path := range []string{"/", "/room/42", "/studio"} {
+	for _, path := range []string{"/", "/room/42", "/studio", "/videos"} {
 		r := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -19,7 +19,7 @@ func TestHandlerServesSPAAndAssets(t *testing.T) {
 			t.Fatalf("path=%s code=%d", path, w.Code)
 		}
 	}
-	assets := map[string]string{"/styles.css": "--pink", "/lumi.css": "LUMI LIVE", "/gift-request.mjs": "GiftRequestStore", "/message-dedup.mjs": "rememberMessage"}
+	assets := map[string]string{"/styles.css": "--pink", "/video-feed.css": ".video-grid", "/home-video.css": ".home-video-module", "/lumi.css": "LUMI LIVE", "/gift-request.mjs": "GiftRequestStore", "/message-dedup.mjs": "rememberMessage"}
 	for path, marker := range assets {
 		r := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
@@ -82,5 +82,18 @@ func TestHomeHeroCopy(t *testing.T) {
 	}
 	if strings.Contains(copy, "LiveFlow") || strings.Contains(copy, "Live Platform") || strings.Contains(copy, "beatiful") {
 		t.Fatal("old home hero copy is still present")
+	}
+}
+
+func TestHomeIncludesFluxFeedVideoModule(t *testing.T) {
+	app, err := fs.ReadFile(files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy := string(app)
+	for _, marker := range []string{"精彩短视频", "data-home-video-scene", "loadHomeVideoFeed", "/api/v1/feed-items"} {
+		if !strings.Contains(copy, marker) {
+			t.Fatalf("home video module is missing %q", marker)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -42,44 +43,46 @@ type HistoryStore interface {
 }
 
 type Server struct {
-	log        *slog.Logger
-	mysql      Pinger
-	history    HistoryStore
-	redis      Pinger
-	centrifugo RealtimeController
-	governance GovernanceStore
-	metrics    *observability.Metrics
-	auth       *auth.Service
-	profiles   UserReader
-	appTokens  *auth.TokenManager
-	cfTokens   *cftoken.Issuer
-	cfSubTTL   time.Duration
-	rooms      RoomAPI
-	danmaku    *danmaku.Service
-	likes      *like.Service
-	viewers    *viewer.Service
-	stats      *stats.Service
-	mux        *http.ServeMux
+	log           *slog.Logger
+	mysql         Pinger
+	history       HistoryStore
+	redis         Pinger
+	centrifugo    RealtimeController
+	governance    GovernanceStore
+	metrics       *observability.Metrics
+	auth          *auth.Service
+	profiles      UserReader
+	appTokens     *auth.TokenManager
+	internalToken string
+	cfTokens      *cftoken.Issuer
+	cfSubTTL      time.Duration
+	rooms         RoomAPI
+	danmaku       *danmaku.Service
+	likes         *like.Service
+	viewers       *viewer.Service
+	stats         *stats.Service
+	mux           *http.ServeMux
 }
 
 type Deps struct {
-	Log        *slog.Logger
-	MySQL      Pinger
-	History    HistoryStore
-	Redis      Pinger
-	Centrifugo RealtimeController
-	Governance GovernanceStore
-	Metrics    *observability.Metrics
-	Auth       *auth.Service
-	Profiles   UserReader
-	AppTokens  *auth.TokenManager
-	CFTokens   *cftoken.Issuer
-	CFSubTTL   time.Duration
-	Rooms      RoomAPI
-	Danmaku    *danmaku.Service
-	Likes      *like.Service
-	Viewers    *viewer.Service
-	Stats      *stats.Service
+	Log           *slog.Logger
+	MySQL         Pinger
+	History       HistoryStore
+	Redis         Pinger
+	Centrifugo    RealtimeController
+	Governance    GovernanceStore
+	Metrics       *observability.Metrics
+	Auth          *auth.Service
+	Profiles      UserReader
+	AppTokens     *auth.TokenManager
+	InternalToken string
+	CFTokens      *cftoken.Issuer
+	CFSubTTL      time.Duration
+	Rooms         RoomAPI
+	Danmaku       *danmaku.Service
+	Likes         *like.Service
+	Viewers       *viewer.Service
+	Stats         *stats.Service
 }
 type UserReader interface {
 	User(context.Context, int64) (auth.User, error)
@@ -114,7 +117,7 @@ func (s *Server) handler(service string) http.Handler {
 // intentionally preserves the public v1 contract, allowing live-api to route
 // traffic by configuration without client changes or dual writes.
 func NewInteraction(d Deps) http.Handler {
-	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, danmaku: d.Danmaku, likes: d.Likes, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
+	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, danmaku: d.Danmaku, likes: d.Likes, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /ready", s.ready)
 	if s.metrics != nil {
@@ -131,7 +134,7 @@ func NewInteraction(d Deps) http.Handler {
 // NewIdentityRoom is the Stage 4 owner for identity, room lifecycle and
 // governance. The gateway forwards the existing v1 contract unchanged.
 func NewIdentityRoom(d Deps) http.Handler {
-	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, governance: d.Governance, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, stats: d.Stats, mux: http.NewServeMux()}
+	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, governance: d.Governance, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, stats: d.Stats, mux: http.NewServeMux()}
 	if s.governance == nil {
 		if governance, ok := d.Redis.(GovernanceStore); ok {
 			s.governance = governance
@@ -157,6 +160,7 @@ func NewIdentityRoom(d Deps) http.Handler {
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/bans", s.requireAuth(s.banUser))
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/bans", s.requireAuth(s.listBans))
 	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.requireAuth(s.unbanUser))
+	s.mux.HandleFunc("POST /internal/v1/users/fluxfeed-sync", s.syncFluxFeedUser)
 	// Internal, versioned read contract for the interaction migration. It is not
 	// exposed by the public gateway Service.
 	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}/access/{user_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +209,39 @@ func NewIdentityRoom(d Deps) http.Handler {
 		writeJSON(w, http.StatusOK, v)
 	})
 	return s.handler("live-identity-room")
+}
+
+type syncFluxFeedUserRequest struct {
+	ID        int64  `json:"id"`
+	Account   string `json:"account"`
+	Nickname  string `json:"nickname"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+func (s *Server) syncFluxFeedUser(w http.ResponseWriter, r *http.Request) {
+	if s.internalToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Internal-Token")), []byte(s.internalToken)) != 1 {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid internal token")
+		return
+	}
+	var in syncFluxFeedUserRequest
+	if err := decodeJSON(w, r, 16<<10, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		return
+	}
+	if in.ID <= 0 {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "id must be positive")
+		return
+	}
+	user, err := s.auth.SyncExternalUser(r.Context(), auth.ExternalUser{
+		Provider: "fluxfeed", Subject: strconv.FormatInt(in.ID, 10), Username: "fluxfeed:" + strconv.FormatInt(in.ID, 10),
+		Nickname: in.Nickname, Avatar: in.AvatarURL,
+	})
+	if err != nil {
+		s.log.Error("sync fluxfeed user", "error", err, "fluxfeed_user_id", in.ID)
+		writeError(w, http.StatusInternalServerError, "IDENTITY_SYNC_FAILED", "failed to sync platform identity")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 // NewQuery owns the read routes that previously forced live-api to connect to
