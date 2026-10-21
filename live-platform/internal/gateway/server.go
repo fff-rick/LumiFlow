@@ -71,14 +71,47 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	var fluxContent http.Handler
+	var fluxAuth http.Handler
 	if strings.TrimSpace(d.FluxFeedURL) != "" {
 		fluxContent, err = s.fluxContentProxy(d.FluxFeedURL)
 		if err != nil {
 			return nil, err
 		}
+		fluxAuth, err = s.fluxAuthProxy(d.FluxFeedURL)
+		if err != nil {
+			return nil, err
+		}
 	}
-	s.routes(identity, interaction, commerce, query, video, fluxContent)
+	s.routes(identity, interaction, commerce, query, video, fluxContent, fluxAuth)
 	return s, nil
+}
+
+// fluxAuthProxy keeps FluxFeed as the owner of password and OAuth sessions.
+// The Next BFF forwards its Set-Cookie headers to the browser so OAuth state
+// remains bound to the public LumiFlow origin.
+func (s *Server) fluxAuthProxy(rawURL string) (http.Handler, error) {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		return nil, fmt.Errorf("invalid fluxfeed upstream URL %q", rawURL)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		path := r.URL.Path
+		director(r)
+		switch {
+		case strings.HasPrefix(path, "/api/v1/auth/"):
+			r.URL.Path = "/api/auth/" + strings.TrimPrefix(path, "/api/v1/auth/")
+		case strings.HasPrefix(path, "/api/v1/oauth/"):
+			r.URL.Path = "/api/oauth/" + strings.TrimPrefix(path, "/api/v1/oauth/")
+		}
+		r.URL.RawPath = ""
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		s.log.ErrorContext(r.Context(), "upstream proxy failed", "upstream", "fluxfeed-auth", "error", err)
+		writeError(w, http.StatusBadGateway, "FLUXFEED_UNAVAILABLE", "authentication service unavailable")
+	}
+	return proxy, nil
 }
 
 func (s *Server) proxy(name, rawURL, errorCode string) (http.Handler, error) {
@@ -132,7 +165,7 @@ func (s *Server) fluxContentProxy(rawURL string) (http.Handler, error) {
 	return proxy, nil
 }
 
-func (s *Server) routes(identity, interaction, commerce, query, video, fluxContent http.Handler) {
+func (s *Server) routes(identity, interaction, commerce, query, video, fluxContent, fluxAuth http.Handler) {
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "milestone": "M8"})
 	})
@@ -145,6 +178,16 @@ func (s *Server) routes(identity, interaction, commerce, query, video, fluxConte
 
 	s.mux.Handle("POST /api/v1/auth/register", s.authEndpoint(identity, true))
 	s.mux.Handle("POST /api/v1/auth/login", s.authEndpoint(identity, false))
+	if fluxAuth != nil {
+		s.mux.Handle("GET /api/v1/auth/capabilities", fluxAuth)
+		s.mux.Handle("POST /api/v1/auth/oauth/sessions", fluxAuth)
+		s.mux.Handle("GET /api/v1/oauth/{provider}", fluxAuth)
+		s.mux.Handle("GET /api/v1/oauth/{provider}/callback", fluxAuth)
+	} else {
+		s.mux.HandleFunc("GET /api/v1/auth/capabilities", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"password_reset": false, "email_verification": false, "oauth_providers": []string{}})
+		})
+	}
 	s.mux.Handle("GET /api/v1/me", s.protected(identity))
 	s.mux.Handle("POST /api/v1/realtime/token", s.protected(identity))
 	s.mux.Handle("POST /api/v1/rooms", s.protected(identity))

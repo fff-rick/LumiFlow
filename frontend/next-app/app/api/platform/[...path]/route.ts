@@ -76,9 +76,8 @@ function apiOrigin() {
 }
 
 function isSessionRoute(path: string[]) {
-  return (
-    path.join("/") === "v1/auth/login" || path.join("/") === "v1/auth/register"
-  )
+  const route = path.join("/")
+  return route === "v1/auth/login" || route === "v1/auth/register" || route === "v1/auth/oauth/sessions"
 }
 
 function sessionResponse(payload: string, status: number) {

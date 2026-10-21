@@ -92,7 +92,13 @@ services:
       FLUXFEED_REDIS_ADDR: fluxfeed-redis:6379
       FLUXFEED_REDIS_PASSWORD: fluxfeed-redis-password
       FLUXFEED_KAFKA_BROKERS: kafka:19092
-      FLUXFEED_PUBLIC_URL: http://localhost:8080
+      # OAuth callbacks travel through the fused Next frontend's /api/oauth
+      # BFF, so FluxFeed must issue its callback URLs for that public origin.
+      FLUXFEED_PUBLIC_URL: "${FLUXFEED_PUBLIC_URL:-http://127.0.0.1:3001}"
+      FLUXFEED_GOOGLE_CLIENT_ID: "${FLUXFEED_GOOGLE_CLIENT_ID:-}"
+      FLUXFEED_GOOGLE_CLIENT_SECRET: "${FLUXFEED_GOOGLE_CLIENT_SECRET:-}"
+      FLUXFEED_GITHUB_CLIENT_ID: "${FLUXFEED_GITHUB_CLIENT_ID:-}"
+      FLUXFEED_GITHUB_CLIENT_SECRET: "${FLUXFEED_GITHUB_CLIENT_SECRET:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_EXPORTER_OTLP_INSECURE: "true"
     volumes:

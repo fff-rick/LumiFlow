@@ -394,7 +394,8 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type registerRequest struct {
-	Username string `json:"username"`
+	Account  string `json:"account"`
+	Username string `json:"username"` // Legacy alias retained for old clients.
 	Nickname string `json:"nickname"`
 	Password string `json:"password"`
 }
@@ -405,7 +406,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
-	out, err := s.auth.Register(r.Context(), in.Username, in.Nickname, in.Password)
+	account := in.Account
+	if account == "" {
+		account = in.Username
+	}
+	out, err := s.auth.Register(r.Context(), account, in.Nickname, in.Password)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrUsernameTaken):
@@ -422,7 +427,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
+	Account  string `json:"account"`
+	Username string `json:"username"` // Legacy alias retained for old clients.
 	Password string `json:"password"`
 }
 
@@ -432,7 +438,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
-	out, err := s.auth.Login(r.Context(), in.Username, in.Password)
+	account := in.Account
+	if account == "" {
+		account = in.Username
+	}
+	out, err := s.auth.Login(r.Context(), account, in.Password)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrInvalidCredentials):

@@ -3,7 +3,10 @@ package auth
 import "time"
 
 type User struct {
-	ID           int64     `json:"id"`
+	ID int64 `json:"id"`
+	// Account is the email-style identifier used by the FluxFeed-compatible
+	// authentication API. Username stays in the response for older clients.
+	Account      string    `json:"account"`
 	Username     string    `json:"username"`
 	Nickname     string    `json:"nickname"`
 	Avatar       string    `json:"avatar"`

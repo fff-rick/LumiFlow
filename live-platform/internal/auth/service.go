@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
-	"unicode"
+	"time"
 )
 
 var (
@@ -36,16 +37,17 @@ func NewService(repo UserRepository, tokens *TokenManager) *Service {
 }
 
 type AuthResult struct {
-	User      User   `json:"user"`
-	Token     string `json:"access_token"`
-	ExpiresAt int64  `json:"expire_at"`
+	User             User   `json:"user"`
+	Token            string `json:"access_token"`
+	ExpiresAt        int64  `json:"expire_at"`
+	ExpiresInSeconds int64  `json:"expires_in_seconds"`
 }
 
-func (s *Service) Register(ctx context.Context, username, nickname, password string) (AuthResult, error) {
-	username = strings.ToLower(strings.TrimSpace(username))
+func (s *Service) Register(ctx context.Context, account, nickname, password string) (AuthResult, error) {
+	account, err := normalizeAccount(account)
 	nickname = strings.TrimSpace(nickname)
-	if !validUsername(username) {
-		return AuthResult{}, fmt.Errorf("%w: username must be 3-32 letters, digits or underscore", ErrInvalidInput)
+	if err != nil {
+		return AuthResult{}, fmt.Errorf("%w: account must be a valid email address", ErrInvalidInput)
 	}
 	if nickname == "" || len([]rune(nickname)) > 32 {
 		return AuthResult{}, fmt.Errorf("%w: nickname must be 1-32 characters", ErrInvalidInput)
@@ -53,7 +55,7 @@ func (s *Service) Register(ctx context.Context, username, nickname, password str
 	if len(password) < 8 || len(password) > 128 {
 		return AuthResult{}, fmt.Errorf("%w: password must be 8-128 characters", ErrInvalidInput)
 	}
-	if _, err := s.repo.ByUsername(ctx, username); err == nil {
+	if _, err := s.repo.ByUsername(ctx, account); err == nil {
 		return AuthResult{}, ErrUsernameTaken
 	} else if !errors.Is(err, ErrUserNotFound) {
 		return AuthResult{}, err
@@ -62,7 +64,7 @@ func (s *Service) Register(ctx context.Context, username, nickname, password str
 	if err != nil {
 		return AuthResult{}, err
 	}
-	u, err := s.repo.Create(ctx, username, nickname, hash)
+	u, err := s.repo.Create(ctx, account, nickname, hash)
 	if err != nil {
 		// A concurrent registration may beat our pre-check. The DB unique index remains authoritative.
 		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
@@ -73,9 +75,9 @@ func (s *Service) Register(ctx context.Context, username, nickname, password str
 	return s.result(u)
 }
 
-func (s *Service) Login(ctx context.Context, username, password string) (AuthResult, error) {
-	username = strings.ToLower(strings.TrimSpace(username))
-	u, err := s.repo.ByUsername(ctx, username)
+func (s *Service) Login(ctx context.Context, account, password string) (AuthResult, error) {
+	account = strings.ToLower(strings.TrimSpace(account))
+	u, err := s.repo.ByUsername(ctx, account)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			return AuthResult{}, ErrInvalidCredentials
@@ -119,17 +121,19 @@ func (s *Service) result(u User) (AuthResult, error) {
 	if err != nil {
 		return AuthResult{}, err
 	}
-	return AuthResult{User: u, Token: tok, ExpiresAt: exp.Unix()}, nil
+	return AuthResult{
+		User:             u,
+		Token:            tok,
+		ExpiresAt:        exp.Unix(),
+		ExpiresInSeconds: int64(time.Until(exp).Seconds()),
+	}, nil
 }
 
-func validUsername(s string) bool {
-	if len(s) < 3 || len(s) > 32 {
-		return false
+func normalizeAccount(value string) (string, error) {
+	account := strings.ToLower(strings.TrimSpace(value))
+	parsed, err := mail.ParseAddress(account)
+	if err != nil || parsed.Address != account || !strings.Contains(account, "@") || len(account) > 254 {
+		return "", errors.New("invalid email")
 	}
-	for _, r := range s {
-		if (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_') || r > unicode.MaxASCII {
-			return false
-		}
-	}
-	return true
+	return account, nil
 }

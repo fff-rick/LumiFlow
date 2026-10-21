@@ -40,6 +40,7 @@ FROM users WHERE username = ? LIMIT 1`, username).
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
+	u.Account = u.Username
 	return u, err
 }
 
@@ -52,6 +53,7 @@ FROM users WHERE id = ? LIMIT 1`, id).
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
+	u.Account = u.Username
 	return u, err
 }
 
