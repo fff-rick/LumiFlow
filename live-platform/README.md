@@ -226,13 +226,13 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | `REDIS_ADDR` / `REDIS_URL` | Redis 地址或 `redis://` / `rediss://` URL |
 | `KAFKA_BROKERS` | Kafka Broker 列表；Gateway 不需要 |
 | `AUTH_JWT_SECRET` | 应用 JWT 密钥 |
-| `FLUXFEED_BASE_URL` | 非空时启用 FluxFeed 统一注册、登录与令牌校验，例如 `http://fluxfeed-api:8080` |
+| `FLUXFEED_BASE_URL` | 必填；FluxFeed 统一注册、登录、令牌校验与视频内容服务地址，例如 `http://fluxfeed-api:8080` |
 | `INTERNAL_SERVICE_TOKEN` | 网关向 Identity 同步 FluxFeed 用户投影的内部服务令牌；必须与 Identity 服务一致 |
 | `CENTRIFUGO_API_KEY` / `CENTRIFUGO_TOKEN_SECRET` | Centrifugo 服务端与令牌密钥 |
 | `VIEWER_TTL` | 观众在线 TTL；显式离房会立即清理 |
 | `ENABLE_DEV_WALLET_CREDIT` | 开发钱包充值开关；生产环境必须为 `false` |
 
-Gateway 路由变量为 `COMMERCE_BASE_URL`、`INTERACTION_BASE_URL`、`IDENTITY_ROOM_BASE_URL` 与 `QUERY_BASE_URL`。四个上游都是必需依赖，`live-api` 不再包含进程内业务回退路径。
+Gateway 路由变量为 `COMMERCE_BASE_URL`、`INTERACTION_BASE_URL`、`IDENTITY_ROOM_BASE_URL`、`QUERY_BASE_URL` 与 `FLUXFEED_BASE_URL`。这些上游均为必需依赖，`live-api` 不再包含进程内业务回退路径。
 
 生产环境必须替换全部开发密钥，并关闭开发充值接口；详见[安全说明](SECURITY.md)。
 

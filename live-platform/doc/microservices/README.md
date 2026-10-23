@@ -28,7 +28,7 @@
 | `live-presence` | 进房、离房、心跳、在线列表、礼物榜、订阅令牌 | 心跳 RPS、Redis CPU、在线人数 |
 | `live-interaction` | 弹幕、点赞、内容过滤、限流和热点保护 | 弹幕/点赞 RPS、扇出速率 |
 | `live-commerce` | 礼物目录、钱包、流水、订单、幂等和事务 Outbox | 交易 TPS、DB 锁等待、Outbox backlog |
-| `live-video` | FluxFeed 视频元数据发布、读取与作者作品列表 | 视频发布 RPS、DB 延迟、CDN 错误率 |
+| `FluxFeed` | 视频发布、审核、互动、Feed 与推荐 | 视频发布 RPS、审核积压、Feed 缓存命中率 |
 | `live-query` | 房间列表、房间详情、消息历史和聚合统计读模型 | 查询 RPS、投影滞后、缓存命中率 |
 
 `Centrifugo` 继续作为独立实时平台；Kafka Worker 按数据所有者独立部署，但不会把每个循环都包装成一个新的业务服务。
@@ -49,7 +49,7 @@
 | `cmd/commerce` | `live-commerce` | ✅ 交易使用独立 schema，房间/治理通过内部 HTTP 校验 |
 | `cmd/worker` | 服务所有者的独立 Worker Deployment | ⚠️ 角色开关和 K8s 清单存在，Compose 仍合并运行 |
 | `cmd/query` | `live-query` | ⚠️ 已使用独立只读账号；安全定义视图在 P3 替换为 Kafka 实体投影 |
-| `cmd/video` | `live-video` | ✅ 独占 `video` schema，复用平台 JWT，通过 Gateway 暴露 FluxFeed 核心视频契约 |
+| FluxFeed 视频域 | FluxFeed API / Worker | ✅ 网关仅按白名单路由转发，LUMI 不保留视频 schema 或视频服务 |
 
 判断依据来自当前真实调用链：
 

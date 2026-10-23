@@ -47,7 +47,7 @@
 | `GET /rooms/{id}/messages` | `live-query` | 弹幕与礼物统一消息流读模型 |
 | `GET /gifts`、`GET /wallet*`、`POST /wallet/dev-credit` | `live-commerce` | 礼物目录与钱包 |
 | `POST /rooms/{id}/gifts`、`GET /gift-orders/{no}` | `live-commerce` | 强一致交易命令与订单查询 |
-| `POST /videos`、`GET/DELETE /videos/{id}`、`GET /users/{id}/videos`、`GET /users/me/videos` | `live-video` | 视频元数据发布与读取 |
+| `POST /videos`、`GET/DELETE /videos/{id}`、`GET /users/{id}/videos`、`GET /users/me/videos` | `FluxFeed` | 网关精确转发至视频内容服务 |
 
 ## 3. `live-gateway`
 
@@ -123,9 +123,9 @@ JWT 初期可继续使用共享 HMAC secret；完成边界收口后改为 Identi
 | 类型 | 所有内容 |
 | --- | --- |
 | MySQL schema | `room` |
-| 表 | `live_rooms`、`room_mutes`、`room_bans`、`room_outbox_events` |
+| 表 | `live_rooms`、`room_mutes`、`room_bans`、`outbox_events`（`room_outbox_events` 仅为迁移期遗留空表） |
 | 本地投影 | `room_user_projection`，只保存 `user_id`、展示名和状态 |
-| Kafka 生产 | `live.room.v1`、`live.governance.v1` |
+| Kafka 生产 | 当前已接入 `integration.room.v1`；域内 `live.room.v1`、`live.governance.v1` 仍为后续拆分目标 |
 | 房间事件 | `room.created.v1`、`room.status-changed.v1` |
 | 治理事件 | `room.user-muted.v1`、`room.user-unmuted.v1`、`room.user-banned.v1`、`room.user-unbanned.v1` |
 
@@ -243,27 +243,7 @@ JWT 初期可继续使用共享 HMAC secret；完成边界收口后改为 Identi
 - 不创建 `room.Repository`，不查询 `live_rooms`、`room_bans` 或 `users`。
 - Gift Consumer 不得回写钱包或订单；它只负责幂等实时投递。
 
-## 9. `live-video`
-
-### 职责
-
-- 承接 FluxFeed 的视频发布、详情、作者作品列表和软删除能力。
-- 只保存视频元数据和互动计数占位行；媒体文件必须位于 HTTP(S) 可访问的对象存储或 CDN。
-- 使用 Identity 签发的应用 JWT，不拥有用户表、不查询身份库。
-
-### 数据所有权
-
-| 类型 | 所有内容 |
-| --- | --- |
-| MySQL schema | `video` |
-| 表 | `videos`、`video_stats` |
-| API | `/api/v1/videos`、`/api/v1/users/{user_id}/videos` |
-
-删除是软删除，且只允许作者本人。`Idempotency-Key` 在同一作者范围内唯一，重放发布请求返回已创建的视频。
-
-本次未接入 FluxFeed 的本地文件上传、转码、封面抽帧和推荐/互动模块：这些能力需要对象存储、转码队列及其独立的安全策略，不能把 FluxFeed 的 `uploads` 目录直接共享给直播服务。
-
-## 10. `live-query`
+## 9. `live-query`
 
 ### 职责
 

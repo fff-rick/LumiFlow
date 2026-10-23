@@ -23,4 +23,7 @@ type ExternalUser struct {
 	Username string
 	Nickname string
 	Avatar   string
+	// Enabled is nil for synchronous login projection, which must not overwrite
+	// an asynchronously projected disable state.
+	Enabled *bool
 }

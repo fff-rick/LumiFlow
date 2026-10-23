@@ -131,7 +131,7 @@ type serviceAccount struct {
 
 func provisionServiceAccounts(ctx context.Context, conn *sql.Conn) error {
 	var accounts []serviceAccount
-	for _, schema := range []string{"identity", "room", "commerce", "archive", "query", "video"} {
+	for _, schema := range []string{"identity", "room", "commerce", "archive", "query"} {
 		upper := strings.ToUpper(schema)
 		accounts = append(accounts,
 			serviceAccount{schema, "live_" + schema + "_app", upper + "_MYSQL_APP_PASSWORD", "SELECT, INSERT, UPDATE, DELETE"},

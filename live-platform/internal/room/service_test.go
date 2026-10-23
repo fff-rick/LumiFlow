@@ -20,7 +20,7 @@ func (f *fakeRepo) Create(_ context.Context, anchor int64, title string) (Room, 
 }
 func (f *fakeRepo) ByID(context.Context, int64) (Room, error)         { return f.v, nil }
 func (f *fakeRepo) List(context.Context, Status, int) ([]Room, error) { return []Room{f.v}, nil }
-func (f *fakeRepo) ChangeStatus(_ context.Context, _ int64, _ int64, from, to Status) error {
+func (f *fakeRepo) ChangeStatus(_ context.Context, _ Room, from, to Status) error {
 	if f.v.Status != from {
 		return ErrInvalidState
 	}

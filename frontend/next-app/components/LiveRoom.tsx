@@ -3,6 +3,8 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { FormEvent, useEffect, useState } from "react"
+import AppNav from "@/components/AppNav"
+import { useSession } from "@/components/SessionProvider"
 
 type Room = {
   room_id: number
@@ -12,7 +14,6 @@ type Room = {
   status: string
 }
 type Stats = { viewer_count: number; like_count: number }
-type User = { id: number; nickname: string }
 type Message = {
   message_id: string
   nickname?: string
@@ -24,10 +25,10 @@ type Message = {
 
 export default function LiveRoom({ roomId }: { roomId: string }) {
   const router = useRouter()
+  const { user } = useSession()
   const [room, setRoom] = useState<Room | null>(null)
   const [stats, setStats] = useState<Stats>({ viewer_count: 0, like_count: 0 })
   const [messages, setMessages] = useState<Message[]>([])
-  const [user, setUser] = useState<User | null>(null)
   const [joined, setJoined] = useState(false)
   const [heartbeatSeconds, setHeartbeatSeconds] = useState(20)
   const [notice, setNotice] = useState("")
@@ -40,9 +41,8 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
       get<{ items?: Message[] }>(
         `/api/platform/v1/rooms/${roomId}/messages?limit=30`
       ),
-      get<User>("/api/platform/v1/me"),
     ])
-      .then(([nextRoom, nextStats, history, nextUser]) => {
+      .then(([nextRoom, nextStats, history]) => {
         if (!active) return
         if (!nextRoom) {
           setNotice("找不到该直播间，或服务暂不可用。")
@@ -51,7 +51,6 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         setRoom(nextRoom)
         if (nextStats) setStats(nextStats)
         setMessages(history?.items ?? [])
-        setUser(nextUser)
       })
       .catch(() => active && setNotice("直播间暂不可用，请稍后重试。"))
     return () => {
@@ -137,8 +136,9 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
 
   const living = room.status === "LIVING"
   return (
-    <main className="min-h-svh bg-zinc-950 px-6 py-6 text-white sm:px-10">
-      <div className="mx-auto max-w-6xl">
+    <main className="min-h-svh bg-zinc-950 text-white">
+      <AppNav />
+      <div className="mx-auto max-w-6xl px-6 py-6 sm:px-10">
         <Link
           className="text-sm text-zinc-400 transition hover:text-white"
           href="/"

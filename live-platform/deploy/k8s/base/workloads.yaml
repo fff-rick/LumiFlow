@@ -157,7 +157,6 @@ spec:
             - {name: INTERACTION_BASE_URL, value: 'http://live-interaction:8082'}
             - {name: IDENTITY_ROOM_BASE_URL, value: 'http://live-identity-room:8083'}
             - {name: QUERY_BASE_URL, value: 'http://live-query:8084'}
-            - {name: VIDEO_BASE_URL, value: 'http://live-video:8085'}
             - {name: OTEL_ENABLED, value: 'false'}
             - {name: DEPLOYMENT_ENVIRONMENT, value: demo}
           resources:
@@ -284,6 +283,8 @@ spec:
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: ROOM_MYSQL_DSN}}
             - name: AUTH_JWT_SECRET
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: AUTH_JWT_SECRET}}
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: INTERNAL_SERVICE_TOKEN}}
             - name: CENTRIFUGO_API_KEY
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: CENTRIFUGO_API_KEY}}
             - name: CENTRIFUGO_TOKEN_SECRET
@@ -292,36 +293,6 @@ spec:
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
             - {name: MYSQL_MAX_OPEN_CONNS, value: '15'}
             - {name: MYSQL_MAX_IDLE_CONNS, value: '8'}
-          resources:
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: 500m, memory: 256Mi}
-          readinessProbe: {httpGet: {path: /ready, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: live-video}
-spec:
-  replicas: 1
-  selector: {matchLabels: {app: live-video}}
-  template:
-    metadata: {labels: {app: live-video}}
-    spec:
-      terminationGracePeriodSeconds: 30
-      imagePullSecrets: [{name: ghcr-secret}]
-      containers:
-        - name: live-video
-          image: live-platform
-          command: [live-video]
-          ports: [{name: http, containerPort: 8085}]
-          envFrom:
-            - configMapRef: {name: live-platform-config}
-          env:
-            - name: VIDEO_MYSQL_DSN
-              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: VIDEO_MYSQL_DSN}}
-            - name: AUTH_JWT_SECRET
-              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: AUTH_JWT_SECRET}}
-            - {name: MYSQL_MAX_OPEN_CONNS, value: '10'}
-            - {name: MYSQL_MAX_IDLE_CONNS, value: '5'}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 256Mi}
@@ -357,6 +328,70 @@ spec:
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-identity-projection}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-identity-projection}}
+  template:
+    metadata: {labels: {app: live-worker-identity-projection, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-identity-projection
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: identity-projection}
+            - name: ARCHIVE_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: ARCHIVE_MYSQL_DSN}}
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: INTERNAL_SERVICE_TOKEN}}
+            - {name: MYSQL_MAX_OPEN_CONNS, value: '10'}
+            - {name: MYSQL_MAX_IDLE_CONNS, value: '5'}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 1000m, memory: 512Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-video-projection}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-video-projection}}
+  template:
+    metadata: {labels: {app: live-worker-video-projection, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-video-projection
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: video-projection}
+            - name: ARCHIVE_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: ARCHIVE_MYSQL_DSN}}
+            - name: QUERY_WRITER_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: QUERY_WRITER_MYSQL_DSN}}
+            - {name: MYSQL_MAX_OPEN_CONNS, value: '10'}
+            - {name: MYSQL_MAX_IDLE_CONNS, value: '5'}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 1000m, memory: 512Mi}
           readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
 ---
 apiVersion: apps/v1
@@ -414,6 +449,36 @@ spec:
             - {name: WORKER_ROLES, value: outbox}
             - name: COMMERCE_MYSQL_DSN
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: COMMERCE_MYSQL_DSN}}
+            - {name: MYSQL_MAX_OPEN_CONNS, value: '10'}
+            - {name: MYSQL_MAX_IDLE_CONNS, value: '5'}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-room-outbox}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-room-outbox}}
+  template:
+    metadata: {labels: {app: live-worker-room-outbox, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-room-outbox
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: room-outbox}
+            - name: ROOM_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: ROOM_MYSQL_DSN}}
             - {name: MYSQL_MAX_OPEN_CONNS, value: '10'}
             - {name: MYSQL_MAX_IDLE_CONNS, value: '5'}
           resources:

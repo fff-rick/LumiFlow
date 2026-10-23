@@ -33,24 +33,27 @@ async function proxy(request: Request, context: RouteContext) {
   const headers = new Headers()
   const contentType = request.headers.get("content-type")
   const idempotencyKey = request.headers.get("idempotency-key")
+  const range = request.headers.get("range")
+  const accept = request.headers.get("accept")
   if (contentType) headers.set("content-type", contentType)
   if (idempotencyKey) headers.set("idempotency-key", idempotencyKey)
+  if (range) headers.set("range", range)
+  if (accept) headers.set("accept", accept)
   const token = (await cookies()).get(sessionCookie)?.value
   if (token) headers.set("authorization", `Bearer ${token}`)
 
   const method = request.method
-  const body =
-    method === "GET" || method === "HEAD"
-      ? undefined
-      : await request.arrayBuffer()
+  const body = method === "GET" || method === "HEAD" ? undefined : request.body
   let upstreamResponse: Response
   try {
-    upstreamResponse = await fetch(upstream, {
+    const init: RequestInit & { duplex?: "half" } = {
       method,
       headers,
       body,
       cache: "no-store",
-    })
+    }
+    if (body) init.duplex = "half"
+    upstreamResponse = await fetch(upstream, init)
   } catch {
     return NextResponse.json(
       { code: "API_UNAVAILABLE", message: "平台服务暂不可用" },
@@ -58,16 +61,30 @@ async function proxy(request: Request, context: RouteContext) {
     )
   }
 
-  const payload = await upstreamResponse.text()
   if (isSessionRoute(path) && upstreamResponse.ok) {
-    return sessionResponse(payload, upstreamResponse.status)
+    const payload = await upstreamResponse.text()
+    return sessionResponse(
+      payload,
+      upstreamResponse.status,
+      isSecureRequest(request)
+    )
   }
-  return new NextResponse(payload, {
+  const responseHeaders = new Headers()
+  for (const name of [
+    "accept-ranges",
+    "content-disposition",
+    "content-length",
+    "content-range",
+    "content-type",
+    "etag",
+    "last-modified",
+  ]) {
+    const value = upstreamResponse.headers.get(name)
+    if (value) responseHeaders.set(name, value)
+  }
+  return new NextResponse(upstreamResponse.body, {
     status: upstreamResponse.status,
-    headers: {
-      "content-type":
-        upstreamResponse.headers.get("content-type") ?? "application/json",
-    },
+    headers: responseHeaders,
   })
 }
 
@@ -77,10 +94,14 @@ function apiOrigin() {
 
 function isSessionRoute(path: string[]) {
   const route = path.join("/")
-  return route === "v1/auth/login" || route === "v1/auth/register" || route === "v1/auth/oauth/sessions"
+  return (
+    route === "v1/auth/login" ||
+    route === "v1/auth/register" ||
+    route === "v1/auth/oauth/sessions"
+  )
 }
 
-function sessionResponse(payload: string, status: number) {
+function sessionResponse(payload: string, status: number, secure: boolean) {
   try {
     const value = JSON.parse(payload) as {
       access_token?: string
@@ -92,7 +113,7 @@ function sessionResponse(payload: string, status: number) {
     response.cookies.set(sessionCookie, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure,
       path: "/",
       maxAge: Math.max(1, value.expires_in_seconds ?? 900),
     })
@@ -103,4 +124,12 @@ function sessionResponse(payload: string, status: number) {
       { status: 502 }
     )
   }
+}
+
+function isSecureRequest(request: Request) {
+  const forwardedProto = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",", 1)[0]
+    .trim()
+  return forwardedProto ? forwardedProto === "https" : request.url.startsWith("https:")
 }

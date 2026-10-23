@@ -4,6 +4,10 @@
   "routes": [
     {"method":"POST","path":"/api/v1/auth/register","auth":"public","success_status":[201],"error_status":[400,409,500,502],"error_codes":["BAD_REQUEST","INVALID_AUTH_INPUT","USERNAME_TAKEN","INTERNAL_ERROR","IDENTITY_ROOM_UNAVAILABLE"],"owner":"live-identity-room"},
     {"method":"POST","path":"/api/v1/auth/login","auth":"public","success_status":[200],"error_status":[400,401,403,500,502],"error_codes":["BAD_REQUEST","INVALID_CREDENTIALS","USER_DISABLED","INTERNAL_ERROR","IDENTITY_ROOM_UNAVAILABLE"],"owner":"live-identity-room"},
+    {"method":"GET","path":"/api/v1/auth/capabilities","auth":"public","success_status":[200],"error_status":[502],"error_codes":["FLUXFEED_UNAVAILABLE"],"owner":"fluxfeed-identity"},
+    {"method":"POST","path":"/api/v1/auth/oauth/sessions","auth":"public","success_status":[200],"error_status":[400,401,502],"error_codes":["UNAUTHORIZED","FLUXFEED_UNAVAILABLE"],"owner":"fluxfeed-identity"},
+    {"method":"GET","path":"/api/v1/oauth/{provider}","auth":"public","success_status":[302],"error_status":[400,502],"error_codes":["FLUXFEED_UNAVAILABLE"],"owner":"fluxfeed-identity"},
+    {"method":"GET","path":"/api/v1/oauth/{provider}/callback","auth":"public","success_status":[302],"error_status":[400,502],"error_codes":["FLUXFEED_UNAVAILABLE"],"owner":"fluxfeed-identity"},
     {"method":"GET","path":"/api/v1/me","auth":"required","success_status":[200],"error_status":[401,404,502],"error_codes":["UNAUTHORIZED","USER_NOT_FOUND","IDENTITY_ROOM_UNAVAILABLE"],"owner":"live-identity-room"},
     {"method":"POST","path":"/api/v1/realtime/token","auth":"required","success_status":[200],"error_status":[401,500,502],"error_codes":["UNAUTHORIZED","INTERNAL_ERROR","IDENTITY_ROOM_UNAVAILABLE"],"owner":"live-identity-room"},
 

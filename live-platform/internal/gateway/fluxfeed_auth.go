@@ -62,7 +62,7 @@ type cachedBridgeUser struct {
 
 func newFluxFeedBridge(d Deps) (*fluxFeedBridge, error) {
 	if strings.TrimSpace(d.FluxFeedURL) == "" {
-		return nil, nil
+		return nil, errors.New("FLUXFEED_BASE_URL is required")
 	}
 	if strings.TrimSpace(d.BridgeJWTSecret) == "" || d.BridgeTokenTTL <= 0 || strings.TrimSpace(d.InternalToken) == "" {
 		return nil, errors.New("FluxFeed auth bridge requires a live JWT secret, token TTL and INTERNAL_SERVICE_TOKEN")

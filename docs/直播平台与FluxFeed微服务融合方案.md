@@ -1,13 +1,13 @@
 # LUMI LIVE 与 FluxFeed 微服务融合方案
 
-**状态：方案评审稿**
+**状态：P3 旧视频服务清理与身份/视频/房间事件闭环已完成；下一步把房间投影接入 Feed 直播卡片查询**
 **范围：将 FluxFeed 的视频内容域接入 LUMI LIVE；不合并两个仓库的业务库，不改变直播互动域的所有权。**
 
 ## 1. 结论
 
 以 **LUMI LIVE 为统一入口和直播互动平台**，以 **FluxFeed 为 LUMI 的视频内容微服务及唯一登录服务**。FluxFeed 接管账号注册/登录、短视频发布、审核、详情、作者作品、Feed、视频互动和推荐；LUMI LIVE 保留 FluxFeed 用户的本地身份投影，用于直播间、实时互动、钱包礼物及实时推送。
 
-不采用“把 FluxFeed 表复制到 `live-platform` 的 `video` schema”或“两个服务直连对方数据库”的方式。现有 `live-video` 仅有元数据 CRUD 与统计占位能力，不能替代 FluxFeed 已实现的审核、Feed、关系、互动、推荐和 Outbox；它应被 FluxFeed 兼容入口逐步替换并最终下线。
+不采用“把 FluxFeed 表复制到 `live-platform` 的 `video` schema”或“两个服务直连对方数据库”的方式。原 `live-video` 仅有元数据 CRUD 与统计占位能力，不能替代 FluxFeed 已实现的审核、Feed、关系、互动、推荐和 Outbox；现已由 FluxFeed 入口替换并下线。
 
 ```text
 Browser / LUMI Web（live-platform 基座）
@@ -31,7 +31,7 @@ LUMI LIVE 领域服务        FluxFeed Video Service
 
 | 项目 | 已具备能力 | 融合时必须处理的差异 |
 | --- | --- | --- |
-| LUMI LIVE | `live-api` 网关、Identity/Room、Centrifugo、Kafka、礼物 Outbox；已有 `/api/v1/videos` 网关路由和 `live-video` | `live-video` 只保存视频元数据，使用 `sub` 型 HS256 JWT，视频接口为 `/api/v1/...` |
+| LUMI LIVE | `live-api` 网关、Identity/Room、Centrifugo、Kafka、礼物 Outbox；`/api/v1/videos` 已切至 FluxFeed | 旧 `live-video` 及其 schema、账号和运行清单已下线 |
 | FluxFeed | 视频审核状态机、视频/互动/关系/Feed/推荐、Kafka Outbox、内容治理 | API 为 `/api/...`，JWT 使用 `uid`/`role`/`token_type` 型 HS256 Token，拥有自己的账户模型与 Kafka 事件信封 |
 
 因此不能直接把 `VIDEO_BASE_URL` 指向 FluxFeed：路径、响应语义和 JWT 声明均不兼容。也不能共用 `AUTH_JWT_SECRET`/`JWT_SECRET` 作为快速方案；对称密钥共享会让任一服务能够伪造另一服务的登录令牌。
@@ -69,7 +69,7 @@ FluxFeed `user_id` 是登录和视频域主体。网关在首次登录或首次�
 | `GET /api/v1/feed-items` | FluxFeed Feed | 不塞入直播间查询服务 |
 | `PUT/DELETE /api/v1/videos/{id}/like` | FluxFeed 视频点赞 | 与直播间点赞严格区分资源和指标 |
 
-`live-gateway` 按路由精确转发到 FluxFeed；不要用通配反向代理把 FluxFeed 的 `/api` 全部暴露到公网。无历史数据时，视频路由可一次性切换；旧 `live-video` 只保留本地开发回退，待联合部署稳定后删除。
+`live-gateway` 按路由精确转发到 FluxFeed；不要用通配反向代理把 FluxFeed 的 `/api` 全部暴露到公网。视频路由已一次性切换，网关启动时必须配置 `FLUXFEED_BASE_URL`，不再回退旧 `live-video`。
 
 FluxFeed 发布会进入审核并可能返回 `202 Accepted`；这是融合后的正式语义。客户端直接以 FluxFeed 的审核状态展示内容，网关不伪造旧 `live-video` 的“立即发布”结果。
 
@@ -99,7 +99,7 @@ LUMI 内部服务从网关换发的 JWT 取得用户，不接受客户端传入�
 
 | Topic | 事件 | 生产者 → 消费者 | 分区键 |
 | --- | --- | --- | --- |
-| `integration.video.v1` | `video.published`、`video.visibility_changed`、`video.deleted` | FluxFeed → LUMI LIVE 视频投影/Web UI | `flux_video_id` |
+| `integration.video.v1` | `video.published`、`video.visibility_changed` | FluxFeed → LUMI LIVE 视频投影/Web UI | `flux_video_id` |
 | `integration.room.v1` | `room.started`、`room.stopped`、`room.owner_changed` | LUMI LIVE → FluxFeed Feed 投影 | `room_id` |
 | `integration.identity.v1` | `user.disabled`、`user.profile_changed` | FluxFeed → LUMI LIVE 直播域身份投影 | `fluxfeed_user_id` |
 
@@ -116,6 +116,12 @@ LUMI 内部服务从网关换发的 JWT 取得用户，不接受客户端传入�
 
 所有生产都通过各自 Transactional Outbox；消费为至少一次语义，以 `(consumer_name,event_id)` 去重。不可解析或违反 Schema 的消息进入对应 `.dlq`，成功写入 DLQ 前不得提交 offset。Trace context 通过 Kafka headers 传递，不写入业务 payload。
 
+`integration.identity.v1` 已先落地为首个跨域闭环：FluxFeed 的资料变更、封禁/解封与各自账户事务同写 Outbox；LUMI Worker 用 `lumi-identity-projection-v1` 消费并在 `archive.processed_events` 去重，再以携带 `X-Internal-Token` 的 HTTP `POST /internal/v1/users/fluxfeed-sync` 更新身份服务投影。身份服务不直接消费 Kafka，也不接受跨服务数据库写入。
+
+`integration.video.v1` 已落地第二个跨域闭环：FluxFeed 在审核发布、治理下架/恢复及作者删除事务中写 Outbox；作者删除统一表达为 `video.visibility_changed` 且 `visible=false`。LUMI 的 `video-projection` Worker 消费后在 `archive.processed_events` 去重，并更新 `query.fluxfeed_video_projection`。该投影只用于直播侧组合查询，不成为视频真相源。
+
+`integration.room.v1` 已落地第三个跨域闭环：LUMI 在开播、停播事务中把 `room.started`、`room.stopped` 写入 Room Outbox，并由独立 `room-outbox` Worker 以 `room_id` 为 key 发布；FluxFeed 的 `fluxfeed-room-projection-v1` 消费组将房间标题、主播昵称和状态写入 `live_room_projection`。`room.owner_changed` 的契约和消费者已就绪，但 LUMI 当前没有转移房主命令，因此暂时没有该事件的生产入口。投影表已可供下一阶段组合 Feed 直播卡片，但尚未改变公开 Feed 响应。
+
 ## 6. 部署、网络与可观测性
 
 - 创建根目录集成 Compose/Kubernetes overlay，使用**一个** Kafka 集群；FluxFeed 指向 LUMI 的 `kafka:19092`，移除第二套 Kafka 和 RabbitMQ 兼容链路的生产依赖。
@@ -131,7 +137,8 @@ LUMI 内部服务从网关换发的 JWT 取得用户，不接受客户端传入�
 | P0：登录与契约冻结 | FluxFeed 注册/登录为唯一入口；网关完成直播域身份投影；补充路由契约测试 | 关闭 `FLUXFEED_BASE_URL`，仅用于本地回退 |
 | P1：视频 API 切换 | 视频发布、详情、删除和作品列表全部转到 FluxFeed；验证审核、幂等和 Feed | 停止视频写入并返回维护错误；不写回旧库 |
 | P2：运行底座 | 部署共享 Kafka、隔离网络、统一观测和端到端冒烟 | 关闭视频路由，不影响直播互动 |
-| P3：清理旧实现 | 联合环境稳定、备份恢复通过后，下线 `cmd/video`、`video` schema 和旧迁移 | 不写回旧库；视频域保持维护模式直到 FluxFeed 恢复 |
+| P3：清理旧实现 | 联合环境稳定、备份恢复通过后，下线 `cmd/video`、`video` schema 和旧运行清单 | 不写回旧库；保留已执行迁移的历史文件，并以新迁移删除旧 schema |
+| P4：直播卡片 | 消费 `integration.room.v1` 形成 FluxFeed 房间投影，并把 `LIVING` 房间接入 Feed 查询 | 关闭直播卡片组合查询；不影响房间生命周期和视频 Feed |
 
 由于没有历史数据，视频 API 在联合环境验证后可一次性切换；开关仅保留在网关，避免客户端和多个后端各自判定流量。
 
@@ -145,6 +152,7 @@ LUMI 内部服务从网关换发的 JWT 取得用户，不接受客户端传入�
 4. 视频删除/下架事件在约定投影时延内从作品列表和 Feed 消失；重复、乱序事件不造成数据复活。
 5. 压测分别验证直播热点房间与 Feed 高并发请求；两套 SLO、容量指标和告警互不掩盖。
 6. 完成联合部署、备份恢复和 P1/P2 的回滚演练后，才允许下线旧 `live-video`。
+7. 开播、停播事件在约定投影时延内把 FluxFeed 房间投影更新为 `LIVING`、`CLOSED`；FluxFeed 不反向写入 LUMI 房间库。
 
 ## 9. 首批变更清单
 

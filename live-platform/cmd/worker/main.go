@@ -16,6 +16,8 @@ import (
 	"github.com/example/live-platform/internal/danmaku"
 	"github.com/example/live-platform/internal/eventdedup"
 	"github.com/example/live-platform/internal/gift"
+	"github.com/example/live-platform/internal/identityclient"
+	"github.com/example/live-platform/internal/identityprojection"
 	"github.com/example/live-platform/internal/idgen"
 	"github.com/example/live-platform/internal/like"
 	"github.com/example/live-platform/internal/mq"
@@ -25,6 +27,7 @@ import (
 	"github.com/example/live-platform/internal/stats"
 	"github.com/example/live-platform/internal/store/mysqlstore"
 	"github.com/example/live-platform/internal/store/redisstore"
+	"github.com/example/live-platform/internal/videoprojection"
 )
 
 func main() {
@@ -61,16 +64,20 @@ func main() {
 		metrics.RegisterDBPool(name, store.Stats)
 		return store
 	}
-	var commerceDB, archiveDB, queryDB *mysqlstore.Store
+	var commerceDB, roomDB, archiveDB, queryDB *mysqlstore.Store
 	if roles["outbox"] {
 		commerceDB = openStore("commerce-mysql", cfg.Databases.CommerceDSN)
 		defer func() { _ = commerceDB.Close() }()
 	}
-	if roles["gift-consumer"] || roles["danmaku-consumer"] {
+	if roles["room-outbox"] {
+		roomDB = openStore("room-mysql", cfg.Databases.RoomDSN)
+		defer func() { _ = roomDB.Close() }()
+	}
+	if roles["gift-consumer"] || roles["danmaku-consumer"] || roles["identity-projection"] || roles["video-projection"] {
 		archiveDB = openStore("archive-mysql", cfg.Databases.ArchiveDSN)
 		defer func() { _ = archiveDB.Close() }()
 	}
-	if roles["like-snapshot"] {
+	if roles["like-snapshot"] || roles["video-projection"] {
 		queryDB = openStore("query-mysql", cfg.Databases.QueryWriterDSN)
 		defer func() { _ = queryDB.Close() }()
 	}
@@ -127,7 +134,7 @@ func main() {
 	}
 
 	var kafkaProducer *mq.Producer
-	if roles["outbox"] || roles["gift-consumer"] || roles["danmaku-consumer"] {
+	if roles["outbox"] || roles["room-outbox"] || roles["gift-consumer"] || roles["danmaku-consumer"] || roles["identity-projection"] || roles["video-projection"] {
 		kafkaProducer, err = mq.NewProducerWithConfig(kafkaCfg, log, metrics)
 		if err != nil {
 			log.Error("create kafka producer", "error", err)
@@ -138,6 +145,11 @@ func main() {
 			outboxRepo := outbox.NewRepository(commerceDB)
 			outboxPublisher := outbox.NewPublisher(log, outboxRepo, kafkaProducer, "worker-"+idgen.New(), cfg.Outbox.PollInterval, cfg.Outbox.BatchSize, cfg.Outbox.Lease, cfg.Outbox.ProduceTimeout, metrics)
 			run("outbox-publisher", outboxPublisher.Run)
+		}
+		if roles["room-outbox"] {
+			roomOutbox := outbox.NewRepository(roomDB)
+			publisher := outbox.NewPublisher(log, roomOutbox, kafkaProducer, "room-worker-"+idgen.New(), cfg.Outbox.PollInterval, cfg.Outbox.BatchSize, cfg.Outbox.Lease, cfg.Outbox.ProduceTimeout)
+			run("room-outbox-publisher", publisher.Run)
 		}
 	}
 	dlqWriter := mq.NewKafkaDeadLetterWriter(kafkaProducer)
@@ -167,6 +179,30 @@ func main() {
 		defer danmakuConsumer.Close()
 		danmakuHandler := danmaku.NewPersistenceHandler(archiveDB, log)
 		run("danmaku-consumer", func(ctx context.Context) error { return danmakuConsumer.Run(ctx, danmakuHandler) })
+	}
+
+	var identityConsumer *mq.Consumer
+	if roles["identity-projection"] {
+		identityConsumer, err = mq.NewConsumerWithConfig(kafkaCfg, cfg.Kafka.IdentityConsumerGroup, []string{cfg.Kafka.IdentityTopic}, log, metrics)
+		if err != nil {
+			log.Error("create identity projection consumer", "error", err)
+			os.Exit(1)
+		}
+		identityConsumer.WithDeadLetterWriter(dlqWriter)
+		defer identityConsumer.Close()
+		projectionHandler := identityprojection.NewHandler(cfg.Kafka.IdentityConsumerGroup, eventdedup.NewStore(archiveDB), identityclient.NewInternal(cfg.IdentityRoom.BaseURL, cfg.Auth.InternalToken), cfg.Kafka.ConsumerLease)
+		run("identity-projection", func(ctx context.Context) error { return identityConsumer.Run(ctx, projectionHandler) })
+	}
+	if roles["video-projection"] {
+		consumer, consumerErr := mq.NewConsumerWithConfig(kafkaCfg, cfg.Kafka.VideoIntegrationConsumerGroup, []string{cfg.Kafka.VideoIntegrationTopic}, log, metrics)
+		if consumerErr != nil {
+			log.Error("create video projection consumer", "error", consumerErr)
+			os.Exit(1)
+		}
+		consumer.WithDeadLetterWriter(dlqWriter)
+		defer consumer.Close()
+		handler := videoprojection.NewHandler(cfg.Kafka.VideoIntegrationConsumerGroup, eventdedup.NewStore(archiveDB), queryDB, cfg.Kafka.ConsumerLease)
+		run("video-projection", func(ctx context.Context) error { return consumer.Run(ctx, handler) })
 	}
 
 	metricsServer := newMetricsServer(cfg.Observability.WorkerMetricsAddr, metrics, cfg.Worker.Roles)

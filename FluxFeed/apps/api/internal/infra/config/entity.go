@@ -53,23 +53,27 @@ type GovernanceConfig struct {
 
 // KafkaConfig 保存统一事件总线的 Broker、Topic 和消费组配置。
 type KafkaConfig struct {
-	Brokers              []string `yaml:"brokers"`
-	Username             string   `yaml:"username"`
-	Password             string   `yaml:"password"`
-	TLS                  bool     `yaml:"tls"`
-	TLSServerName        string   `yaml:"tls_server_name"`
-	ClientID             string   `yaml:"client_id"`
-	VideoTopic           string   `yaml:"video_topic"`
-	InteractionTopic     string   `yaml:"interaction_topic"`
-	ExposureTopic        string   `yaml:"exposure_topic"`
-	RelationTopic        string   `yaml:"relation_topic"`
-	FanoutGroup          string   `yaml:"fanout_group"`
-	EmbeddingGroup       string   `yaml:"embedding_group"`
-	CounterGroup         string   `yaml:"counter_group"`
-	FeatureGroup         string   `yaml:"feature_group"`
-	RecommendationGroup  string   `yaml:"recommendation_group"`
-	ConsumerMaxRetries   int      `yaml:"consumer_max_retries"`
-	ConsumerRetryBackoff string   `yaml:"consumer_retry_backoff"`
+	Brokers               []string `yaml:"brokers"`
+	Username              string   `yaml:"username"`
+	Password              string   `yaml:"password"`
+	TLS                   bool     `yaml:"tls"`
+	TLSServerName         string   `yaml:"tls_server_name"`
+	ClientID              string   `yaml:"client_id"`
+	VideoTopic            string   `yaml:"video_topic"`
+	InteractionTopic      string   `yaml:"interaction_topic"`
+	ExposureTopic         string   `yaml:"exposure_topic"`
+	RelationTopic         string   `yaml:"relation_topic"`
+	IdentityTopic         string   `yaml:"identity_topic"`
+	VideoIntegrationTopic string   `yaml:"video_integration_topic"`
+	RoomIntegrationTopic  string   `yaml:"room_integration_topic"`
+	RoomProjectionGroup   string   `yaml:"room_projection_group"`
+	FanoutGroup           string   `yaml:"fanout_group"`
+	EmbeddingGroup        string   `yaml:"embedding_group"`
+	CounterGroup          string   `yaml:"counter_group"`
+	FeatureGroup          string   `yaml:"feature_group"`
+	RecommendationGroup   string   `yaml:"recommendation_group"`
+	ConsumerMaxRetries    int      `yaml:"consumer_max_retries"`
+	ConsumerRetryBackoff  string   `yaml:"consumer_retry_backoff"`
 }
 
 // JWTConfig 保存 JWT 签名密钥和访问 token 有效期。

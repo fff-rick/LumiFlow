@@ -48,7 +48,7 @@ func TestWorkerRoleDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := []string{"stats", "like-snapshot", "outbox", "gift-consumer", "danmaku-consumer"}
+	want := []string{"stats", "like-snapshot", "outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection"}
 	if len(cfg.Worker.Roles) != len(want) {
 		t.Fatalf("unexpected worker role count: %v", cfg.Worker.Roles)
 	}
@@ -85,6 +85,26 @@ func TestStatsOnlyWorkerDoesNotRequireKafkaCredentials(t *testing.T) {
 	}
 }
 
+func TestVideoProjectionWorkerRequiresKafkaCredentials(t *testing.T) {
+	t.Setenv("WORKER_ROLES", "video-projection")
+	t.Setenv("KAFKA_SASL_MECHANISM", "scram-sha-512")
+	t.Setenv("KAFKA_SASL_USERNAME", "")
+	t.Setenv("KAFKA_SASL_PASSWORD", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected video projection worker to require Kafka credentials")
+	}
+}
+
+func TestRoomOutboxWorkerRequiresKafkaCredentials(t *testing.T) {
+	t.Setenv("WORKER_ROLES", "room-outbox")
+	t.Setenv("KAFKA_SASL_MECHANISM", "scram-sha-512")
+	t.Setenv("KAFKA_SASL_USERNAME", "")
+	t.Setenv("KAFKA_SASL_PASSWORD", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected room outbox worker to require Kafka credentials")
+	}
+}
+
 func TestGatewayConfigDoesNotRequireBusinessDependencies(t *testing.T) {
 	t.Setenv("MYSQL_MAX_OPEN_CONNS", "invalid")
 	t.Setenv("KAFKA_BROKERS", "")
@@ -93,7 +113,7 @@ func TestGatewayConfigDoesNotRequireBusinessDependencies(t *testing.T) {
 	t.Setenv("INTERACTION_BASE_URL", "http://interaction:8082")
 	t.Setenv("IDENTITY_ROOM_BASE_URL", "http://identity-room:8083")
 	t.Setenv("QUERY_BASE_URL", "http://query:8084")
-	t.Setenv("VIDEO_BASE_URL", "http://video:8085")
+	t.Setenv("FLUXFEED_BASE_URL", "http://fluxfeed:8080")
 	cfg, err := LoadGateway()
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
@@ -101,7 +121,7 @@ func TestGatewayConfigDoesNotRequireBusinessDependencies(t *testing.T) {
 	if cfg.Query.BaseURL != "http://query:8084" {
 		t.Fatalf("unexpected query target %q", cfg.Query.BaseURL)
 	}
-	if cfg.Video.BaseURL != "http://video:8085" {
-		t.Fatalf("unexpected video target %q", cfg.Video.BaseURL)
+	if cfg.Auth.FluxFeedBaseURL != "http://fluxfeed:8080" {
+		t.Fatalf("unexpected FluxFeed target %q", cfg.Auth.FluxFeedBaseURL)
 	}
 }

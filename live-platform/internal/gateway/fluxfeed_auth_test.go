@@ -50,7 +50,7 @@ func TestFluxFeedBridgeOwnsLoginAndExchangesProtectedRequests(t *testing.T) {
 	}))
 	defer protected.Close()
 
-	api, err := New(Deps{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityRoomURL: identity.URL, InteractionURL: protected.URL, CommerceURL: protected.URL, QueryURL: protected.URL, VideoURL: protected.URL, FluxFeedURL: flux.URL, InternalToken: "bridge-secret", BridgeJWTSecret: "live-secret", BridgeTokenTTL: time.Hour})
+	api, err := New(Deps{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityRoomURL: identity.URL, InteractionURL: protected.URL, CommerceURL: protected.URL, QueryURL: protected.URL, FluxFeedURL: flux.URL, InternalToken: "bridge-secret", BridgeJWTSecret: "live-secret", BridgeTokenTTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestFluxFeedVideoRoutesKeepAccessTokenAndRewritePath(t *testing.T) {
 
 	api, err := New(Deps{
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityRoomURL: upstream.URL,
-		InteractionURL: upstream.URL, CommerceURL: upstream.URL, QueryURL: upstream.URL, VideoURL: upstream.URL,
+		InteractionURL: upstream.URL, CommerceURL: upstream.URL, QueryURL: upstream.URL,
 		FluxFeedURL: flux.URL, InternalToken: "bridge-secret", BridgeJWTSecret: "live-secret", BridgeTokenTTL: time.Hour,
 	})
 	if err != nil {
@@ -134,5 +134,17 @@ func TestFluxFeedVideoRoutesKeepAccessTokenAndRewritePath(t *testing.T) {
 				t.Fatalf("upstream request=%q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGatewayRequiresFluxFeed(t *testing.T) {
+	_, err := New(Deps{
+		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		IdentityRoomURL: "http://identity-room:8083", InteractionURL: "http://interaction:8082",
+		CommerceURL: "http://commerce:8081", QueryURL: "http://query:8084",
+		InternalToken: "bridge-secret", BridgeJWTSecret: "live-secret", BridgeTokenTTL: time.Hour,
+	})
+	if err == nil || !strings.Contains(err.Error(), "FLUXFEED_BASE_URL") {
+		t.Fatalf("expected missing FluxFeed configuration error, got %v", err)
 	}
 }

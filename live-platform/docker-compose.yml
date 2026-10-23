@@ -21,8 +21,6 @@ x-app-env: &app-env
   IDENTITY_ROOM_BASE_URL: "http://live-identity-room:8083"
   QUERY_HTTP_ADDR: ":8084"
   QUERY_BASE_URL: "http://live-query:8084"
-  VIDEO_HTTP_ADDR: ":8085"
-  VIDEO_BASE_URL: "http://live-video:8085"
   FLUXFEED_BASE_URL: "${FLUXFEED_BASE_URL:-}"
   DANMAKU_SENSITIVE_WORDS: "spam,banned"
   DANMAKU_USER_RATE_LIMIT: "${DANMAKU_USER_RATE_LIMIT:-5}"
@@ -56,8 +54,13 @@ x-app-env: &app-env
   KAFKA_BROKERS: "kafka:19092"
   KAFKA_DANMAKU_TOPIC: "live.danmaku.v1"
   KAFKA_GIFT_TOPIC: "live.gift.v1"
+  KAFKA_IDENTITY_TOPIC: "integration.identity.v1"
+  KAFKA_VIDEO_INTEGRATION_TOPIC: "integration.video.v1"
+  KAFKA_ROOM_INTEGRATION_TOPIC: "integration.room.v1"
   KAFKA_DANMAKU_CONSUMER_GROUP: "live-danmaku-persist-v1"
   KAFKA_GIFT_CONSUMER_GROUP: "live-gift-realtime-v1"
+  KAFKA_IDENTITY_CONSUMER_GROUP: "lumi-identity-projection-v1"
+  KAFKA_VIDEO_INTEGRATION_CONSUMER_GROUP: "lumi-video-projection-v1"
   KAFKA_CONSUMER_LEASE: "30s"
   OUTBOX_POLL_INTERVAL: "100ms"
   OUTBOX_BATCH_SIZE: "100"
@@ -78,7 +81,6 @@ x-gateway-env: &gateway-env
   INTERACTION_BASE_URL: "http://live-interaction:8082"
   IDENTITY_ROOM_BASE_URL: "http://live-identity-room:8083"
   QUERY_BASE_URL: "http://live-query:8084"
-  VIDEO_BASE_URL: "http://live-video:8085"
   FLUXFEED_BASE_URL: "${FLUXFEED_BASE_URL:-}"
   INTERNAL_SERVICE_TOKEN: "dev-internal-service-token-change-me"
   OTEL_ENABLED: "true"
@@ -170,6 +172,8 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.gift.v1 --partitions 6 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.danmaku.v1.dlq --partitions 6 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.gift.v1.dlq --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic integration.room.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic integration.room.v1.dlq --partitions 6 --replication-factor 1
         /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.danmaku.v1 --add-config retention.ms=604800000
         /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.gift.v1 --add-config retention.ms=604800000
         /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.danmaku.v1.dlq --add-config retention.ms=2592000000
@@ -262,9 +266,6 @@ services:
       QUERY_MYSQL_APP_PASSWORD: "query-app"
       QUERY_MYSQL_MIGRATION_PASSWORD: "query-migrate"
       QUERY_MYSQL_AUDIT_PASSWORD: "query-audit"
-      VIDEO_MYSQL_APP_PASSWORD: "video-app"
-      VIDEO_MYSQL_MIGRATION_PASSWORD: "video-migrate"
-      VIDEO_MYSQL_AUDIT_PASSWORD: "video-audit"
     depends_on:
       mysql: {condition: service_healthy}
     restart: "no"
@@ -279,7 +280,6 @@ services:
       live-interaction: {condition: service_started}
       live-identity-room: {condition: service_started}
       live-query: {condition: service_started}
-      live-video: {condition: service_started}
       otel-collector: {condition: service_started}
 
   live-query:
@@ -328,22 +328,13 @@ services:
       centrifugo: {condition: service_started}
       otel-collector: {condition: service_started}
 
-  live-video:
-    build: .
-    command: ["live-video"]
-    environment:
-      <<: *app-env
-      VIDEO_MYSQL_DSN: "live_video_app:video-app@tcp(mysql:3306)/video?parseTime=true&charset=utf8mb4"
-    depends_on:
-      live-migrate: {condition: service_completed_successfully}
-      otel-collector: {condition: service_started}
-
   live-worker:
     build: .
     command: ["live-worker"]
     environment:
       <<: *app-env
       COMMERCE_MYSQL_DSN: "live_commerce_app:commerce-app@tcp(mysql:3306)/commerce?parseTime=true&charset=utf8mb4"
+      ROOM_MYSQL_DSN: "live_room_app:room-app@tcp(mysql:3306)/room?parseTime=true&charset=utf8mb4"
       ARCHIVE_MYSQL_DSN: "live_archive_app:archive-app@tcp(mysql:3306)/archive?parseTime=true&charset=utf8mb4"
       QUERY_WRITER_MYSQL_DSN: "live_query_app:query-app@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"
     ports: ["${WORKER_HOST_PORT:-19090}:9090"]

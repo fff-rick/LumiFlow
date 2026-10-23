@@ -8,7 +8,6 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-api ./cmd/api
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-commerce ./cmd/commerce \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-interaction ./cmd/interaction \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-identity-room ./cmd/identityroom \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-video ./cmd/video \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-worker ./cmd/worker \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-migrate ./cmd/migrate
 
@@ -21,7 +20,6 @@ COPY --from=build /out/live-query /usr/local/bin/live-query
 COPY --from=build /out/live-commerce /usr/local/bin/live-commerce
 COPY --from=build /out/live-interaction /usr/local/bin/live-interaction
 COPY --from=build /out/live-identity-room /usr/local/bin/live-identity-room
-COPY --from=build /out/live-video /usr/local/bin/live-video
 COPY --from=build /out/live-worker /usr/local/bin/live-worker
 COPY --from=build /out/live-migrate /usr/local/bin/live-migrate
 COPY migrations /app/migrations

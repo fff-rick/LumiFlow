@@ -15,9 +15,10 @@ import (
 )
 
 type Repository struct {
-	db         *gorm.DB
-	outbox     *infraoutbox.Repository
-	videoTopic string
+	db               *gorm.DB
+	outbox           *infraoutbox.Repository
+	videoTopic       string
+	integrationTopic string
 }
 
 // videoWithStatModel 承接 video 与 video_stat 联表查询结果。
@@ -46,9 +47,10 @@ func New(db *gorm.DB) *Repository {
 }
 
 // EnablePublishedOutbox 让视频和发布事件在同一个数据库事务中落盘。
-func (r *Repository) EnablePublishedOutbox(outbox *infraoutbox.Repository, topic string) {
+func (r *Repository) EnablePublishedOutbox(outbox *infraoutbox.Repository, topic, integrationTopic string) {
 	r.outbox = outbox
 	r.videoTopic = strings.TrimSpace(topic)
+	r.integrationTopic = strings.TrimSpace(integrationTopic)
 }
 
 // EnsureStats 确保每个视频都有一条统计记录。
@@ -108,6 +110,15 @@ func (r *Repository) Save(ctx context.Context, video *domainvideo.Video) error {
 			}
 			if err := r.outbox.Add(tx, r.videoTopic, event); err != nil {
 				return err
+			}
+			if r.integrationTopic != "" {
+				integration, err := applicationeventbus.NewIntegrationVideoEvent(applicationeventbus.TypeIntegrationVideoPublished, source.AuthorID, source.VideoID, source.OccurredAt, applicationeventbus.VideoPayload{Title: source.Title, Description: source.Description, MediaURL: source.MediaURL, CoverURL: source.CoverURL, PublishedAt: source.PublishedAt, Visible: true})
+				if err != nil {
+					return err
+				}
+				if err := r.outbox.Add(tx, r.integrationTopic, integration); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -222,19 +233,29 @@ func (r *Repository) ListByAuthorAnyStatus(ctx context.Context, authorID int64, 
 	return videos, nil
 }
 
-// UpdateStatus 只更新状态字段，用于软删除。
+// UpdateStatus 更新状态；软删除时与集成可见性事件同事务提交。
 func (r *Repository) UpdateStatus(ctx context.Context, video *domainvideo.Video) error {
-	result := r.db.WithContext(ctx).
-		Model(&VideoModel{}).
-		Where("id = ?", video.ID).
-		Update("status", video.Status)
-	if result.Error != nil {
-		return result.Error
+	update := func(tx *gorm.DB) error {
+		result := tx.Model(&VideoModel{}).Where("id = ?", video.ID).Update("status", video.Status)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return domainvideo.ErrVideoNotFound
+		}
+		if video.Status == domainvideo.StatusDeleted && r.outbox != nil && r.integrationTopic != "" {
+			event, err := applicationeventbus.NewIntegrationVideoEvent(applicationeventbus.TypeIntegrationVideoVisibilityChanged, video.AuthorID, video.ID, time.Now(), applicationeventbus.VideoPayload{Visible: false})
+			if err != nil {
+				return err
+			}
+			return r.outbox.Add(tx, r.integrationTopic, event)
+		}
+		return nil
 	}
-	if result.RowsAffected == 0 {
-		return domainvideo.ErrVideoNotFound
+	if video.Status == domainvideo.StatusDeleted && r.outbox != nil && r.integrationTopic != "" {
+		return r.db.WithContext(ctx).Transaction(update)
 	}
-	return nil
+	return update(r.db.WithContext(ctx))
 }
 
 func (r *Repository) UpdateDraft(ctx context.Context, video *domainvideo.Video) error {

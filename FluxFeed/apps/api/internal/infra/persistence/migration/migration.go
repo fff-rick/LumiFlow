@@ -13,6 +13,7 @@ import (
 	infraplayback "FluxFeed/internal/infra/persistence/playback"
 	infrarecommendation "FluxFeed/internal/infra/persistence/recommendation"
 	infrarelation "FluxFeed/internal/infra/persistence/relation"
+	roomprojection "FluxFeed/internal/infra/persistence/roomprojection"
 	infravideo "FluxFeed/internal/infra/persistence/video"
 	"errors"
 	"time"
@@ -85,6 +86,7 @@ func autoMigrateModels(db *gorm.DB) error {
 			&infraplayback.QoSLogModel{},
 			&infrarelation.FollowModel{},
 			&infrarelation.RelationStatModel{},
+			&roomprojection.Model{},
 			&infragovernance.ReviewModel{},
 			&infragovernance.ReviewItemModel{},
 			&infragovernance.StateHistoryModel{},

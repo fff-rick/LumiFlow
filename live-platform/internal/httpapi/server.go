@@ -216,6 +216,7 @@ type syncFluxFeedUserRequest struct {
 	Account   string `json:"account"`
 	Nickname  string `json:"nickname"`
 	AvatarURL string `json:"avatar_url"`
+	Enabled   *bool  `json:"enabled"`
 }
 
 func (s *Server) syncFluxFeedUser(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +235,7 @@ func (s *Server) syncFluxFeedUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := s.auth.SyncExternalUser(r.Context(), auth.ExternalUser{
 		Provider: "fluxfeed", Subject: strconv.FormatInt(in.ID, 10), Username: "fluxfeed:" + strconv.FormatInt(in.ID, 10),
-		Nickname: in.Nickname, Avatar: in.AvatarURL,
+		Nickname: in.Nickname, Avatar: in.AvatarURL, Enabled: in.Enabled,
 	})
 	if err != nil {
 		s.log.Error("sync fluxfeed user", "error", err, "fluxfeed_user_id", in.ID)

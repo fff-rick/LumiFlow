@@ -28,6 +28,7 @@ import (
 	migration "FluxFeed/internal/infra/persistence/migration"
 	infraoutbox "FluxFeed/internal/infra/persistence/outbox"
 	infrarecommendation "FluxFeed/internal/infra/persistence/recommendation"
+	roomprojection "FluxFeed/internal/infra/persistence/roomprojection"
 
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -148,6 +149,9 @@ func startWorkers(ctx context.Context, cfg *infraconfig.Config, gormDB *gorm.DB,
 	redisClient := infracache.NewRedisClient(cfg.Redis)
 	feedCache := infracache.NewFeedCache(redisClient)
 	if bus, ok := eventBus.(applicationeventbus.Bus); ok {
+		if err := bus.Subscribe(ctx, cfg.Kafka.RoomIntegrationTopic, cfg.Kafka.RoomProjectionGroup, roomprojection.NewHandler(roomprojection.New(gormDB)).Handle); err != nil {
+			return err
+		}
 		if err := bus.Subscribe(ctx, videoTopic, "fluxfeed-content-visibility", func(ctx context.Context, event *applicationeventbus.Event) error {
 			if event.Type != applicationeventbus.TypeContentVisibilityChanged {
 				return nil
