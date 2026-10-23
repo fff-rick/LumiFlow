@@ -136,7 +136,7 @@ func Register(g *gin.Engine, cfg *infraconfig.Config, db *sql.DB) error {
 	playbackHandler := interfaceshttpplayback.New(playbackService)
 	outboxRepo := infraoutbox.New(gormDB)
 	outboxHandler := interfaceshttpoutbox.New(outboxRepo)
-	moderationService := infragovernance.New(gormDB, outboxRepo, normalizedTopic(cfg.Kafka.VideoTopic, "fluxfeed.video"), normalizedTopic(cfg.Kafka.InteractionTopic, "fluxfeed.interaction"))
+	moderationService := infragovernance.New(gormDB, outboxRepo, normalizedTopic(cfg.Kafka.VideoTopic, "fluxfeed.video"), normalizedTopic(cfg.Kafka.InteractionTopic, "fluxfeed.interaction"), normalizedTopic(cfg.Kafka.IdentityTopic, "integration.identity.v1"), normalizedTopic(cfg.Kafka.VideoIntegrationTopic, "integration.video.v1"))
 	moderationHandler := interfaceshttpgovernance.NewModeration(moderationService)
 	if feedCache != nil {
 		moderationService.SetVisibilityInvalidator(feedCache)
@@ -159,7 +159,8 @@ func Register(g *gin.Engine, cfg *infraconfig.Config, db *sql.DB) error {
 	}
 	if eventPublisher != nil {
 		if _, kafkaEnabled := eventPublisher.(*inframq.FeedEventBus); kafkaEnabled {
-			videoRepo.EnablePublishedOutbox(outboxRepo, normalizedTopic(cfg.Kafka.VideoTopic, "fluxfeed.video"))
+			accountRepo.EnableIdentityOutbox(outboxRepo, normalizedTopic(cfg.Kafka.IdentityTopic, "integration.identity.v1"))
+			videoRepo.EnablePublishedOutbox(outboxRepo, normalizedTopic(cfg.Kafka.VideoTopic, "fluxfeed.video"), normalizedTopic(cfg.Kafka.VideoIntegrationTopic, "integration.video.v1"))
 			interactionRepo.EnableCommentOutbox(outboxRepo, normalizedTopic(cfg.Kafka.InteractionTopic, "fluxfeed.interaction"))
 			exposureRepo.EnableViewEventOutbox(outboxRepo, normalizedTopic(cfg.Kafka.ExposureTopic, "fluxfeed.exposure"))
 			relationRepo.EnableFollowOutbox(outboxRepo, normalizedTopic(cfg.Kafka.RelationTopic, "fluxfeed.relation"))

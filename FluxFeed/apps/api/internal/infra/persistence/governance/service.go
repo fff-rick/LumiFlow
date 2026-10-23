@@ -62,14 +62,16 @@ func (RuleProvider) Review(_ string, content string) (string, string, string) {
 }
 
 type Service struct {
-	db               *gorm.DB
-	outbox           *infraoutbox.Repository
-	videoTopic       string
-	interactionTopic string
-	provider         Provider
-	visibility       VisibilityInvalidator
-	publisher        applicationvideo.PublishedEventPublisher
-	commentPublisher applicationinteraction.CommentEventPublisher
+	db                    *gorm.DB
+	outbox                *infraoutbox.Repository
+	videoTopic            string
+	interactionTopic      string
+	identityTopic         string
+	integrationVideoTopic string
+	provider              Provider
+	visibility            VisibilityInvalidator
+	publisher             applicationvideo.PublishedEventPublisher
+	commentPublisher      applicationinteraction.CommentEventPublisher
 }
 type VisibilityInvalidator interface {
 	InvalidateVideo(context.Context, int64, bool) error
@@ -79,6 +81,12 @@ func New(db *gorm.DB, outbox *infraoutbox.Repository, videoTopic string, interac
 	s := &Service{db: db, outbox: outbox, videoTopic: strings.TrimSpace(videoTopic), provider: RuleProvider{}}
 	if len(interactionTopic) > 0 {
 		s.interactionTopic = strings.TrimSpace(interactionTopic[0])
+	}
+	if len(interactionTopic) > 1 {
+		s.identityTopic = strings.TrimSpace(interactionTopic[1])
+	}
+	if len(interactionTopic) > 2 {
+		s.integrationVideoTopic = strings.TrimSpace(interactionTopic[2])
 	}
 	return s
 }
@@ -376,6 +384,15 @@ func (s *Service) publishTarget(tx *gorm.DB, review *ReviewModel, actorID int64,
 			}
 			if err := s.outbox.Add(tx, s.videoTopic, event); err != nil {
 				return err
+			}
+			if s.integrationVideoTopic != "" {
+				integration, err := applicationeventbus.NewIntegrationVideoEvent(applicationeventbus.TypeIntegrationVideoPublished, model.AuthorID, model.ID, eventSource.OccurredAt, applicationeventbus.VideoPayload{Title: eventSource.Title, Description: eventSource.Description, MediaURL: eventSource.MediaURL, CoverURL: eventSource.CoverURL, PublishedAt: eventSource.PublishedAt, Visible: true})
+				if err != nil {
+					return err
+				}
+				if err := s.outbox.Add(tx, s.integrationVideoTopic, integration); err != nil {
+					return err
+				}
 			}
 		}
 		if eventSource != nil && s.publisher != nil {
@@ -977,10 +994,13 @@ func (s *Service) SetUserBanned(ctx context.Context, actorID, userID int64, bann
 	var videoIDs []int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var before struct {
-			ID     int64
-			Status int
+			ID        int64
+			Status    int
+			Account   string
+			Nickname  string
+			AvatarURL string `gorm:"column:avatar_url"`
 		}
-		if err := tx.Table("account").Select("id,status").Where("id=?", userID).Take(&before).Error; err != nil {
+		if err := tx.Table("account").Select("id,status,account,nickname,avatar_url").Where("id=?", userID).Take(&before).Error; err != nil {
 			return mapNotFound(err)
 		}
 		status := 1
@@ -989,6 +1009,19 @@ func (s *Service) SetUserBanned(ctx context.Context, actorID, userID int64, bann
 		}
 		if err := tx.Table("account").Where("id=?", userID).Update("status", status).Error; err != nil {
 			return err
+		}
+		if s.outbox != nil && s.identityTopic != "" {
+			eventType := applicationeventbus.TypeIdentityProfileChanged
+			if banned {
+				eventType = applicationeventbus.TypeIdentityDisabled
+			}
+			event, err := applicationeventbus.NewIdentityEvent(eventType, userID, time.Now(), applicationeventbus.IdentityPayload{Account: before.Account, Nickname: before.Nickname, AvatarURL: before.AvatarURL})
+			if err != nil {
+				return err
+			}
+			if err := s.outbox.Add(tx, s.identityTopic, event); err != nil {
+				return err
+			}
 		}
 		if banned {
 			if err := tx.Model(&infravideo.VideoModel{}).Where("author_id=? AND status=?", userID, domainvideo.StatusPublished).Pluck("id", &videoIDs).Error; err != nil {
@@ -1079,7 +1112,17 @@ func (s *Service) visibilityEvent(tx *gorm.DB, videoID, authorID int64, status i
 	if err != nil {
 		return err
 	}
-	return s.outbox.Add(tx, s.videoTopic, event)
+	if err := s.outbox.Add(tx, s.videoTopic, event); err != nil {
+		return err
+	}
+	if s.integrationVideoTopic == "" {
+		return nil
+	}
+	integration, err := applicationeventbus.NewIntegrationVideoEvent(applicationeventbus.TypeIntegrationVideoVisibilityChanged, authorID, videoID, time.Now(), applicationeventbus.VideoPayload{Visible: status == domainvideo.StatusPublished})
+	if err != nil {
+		return err
+	}
+	return s.outbox.Add(tx, s.integrationVideoTopic, integration)
 }
 
 func actorType(id int64) string {

@@ -66,7 +66,9 @@ video_id="$(jq -er '.id' "$video_body")"
 require_status 200 "$(create_video)" "$video_body"
 
 curl -fsS "$api_base/api/v1/users/me/videos" -H "Authorization: Bearer $token" | jq -e --argjson id "$video_id" '.items[] | select(.id == $id)' >/dev/null
-require_status 204 "$(curl -sS -o "$tmpdir/delete.json" -w '%{http_code}' -X DELETE "$api_base/api/v1/videos/$video_id" -H "Authorization: Bearer $token")" "$tmpdir/delete.json"
+if [[ "${P2_KEEP_VIDEO:-false}" != "true" ]]; then
+  require_status 204 "$(curl -sS -o "$tmpdir/delete.json" -w '%{http_code}' -X DELETE "$api_base/api/v1/videos/$video_id" -H "Authorization: Bearer $token")" "$tmpdir/delete.json"
+fi
 curl -fsS "$api_base/api/v1/feed-items" >/dev/null
 
-printf 'P2 FluxFeed smoke passed: registered user, projected LUMI identity, uploaded assets, created/replayed/listed/deleted video.\n'
+printf 'P2 FluxFeed smoke passed: registered user, projected LUMI identity, uploaded assets, created/replayed/listed video; video_id=%s keep_video=%s.\n' "$video_id" "${P2_KEEP_VIDEO:-false}"

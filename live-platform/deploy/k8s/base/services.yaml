@@ -80,13 +80,6 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: live-video}
-spec:
-  selector: {app: live-video}
-  ports: [{name: http, port: 8085, targetPort: http}]
----
-apiVersion: v1
-kind: Service
 metadata:
   name: live-worker-metrics
 spec:

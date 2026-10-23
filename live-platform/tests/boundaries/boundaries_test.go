@@ -79,14 +79,12 @@ func TestARCH002ServiceDatabaseConnectionBaseline(t *testing.T) {
 		"cmd/identityroom/main.go": 2,
 		"cmd/interaction/main.go":  0,
 		"cmd/worker/main.go":       1,
-		"cmd/video/main.go":        1,
 	}
 	expectedDSNs := map[string][]string{
 		"cmd/query/main.go":        {"cfg.Databases.QueryDSN"},
 		"cmd/commerce/main.go":     {"cfg.Databases.CommerceDSN"},
 		"cmd/identityroom/main.go": {"cfg.Databases.IdentityDSN", "cfg.Databases.RoomDSN"},
 		"cmd/worker/main.go":       {"cfg.Databases.CommerceDSN", "cfg.Databases.ArchiveDSN", "cfg.Databases.QueryWriterDSN"},
-		"cmd/video/main.go":        {"cfg.Databases.VideoDSN"},
 	}
 	for file, want := range expectedOpenCalls {
 		source := readFile(t, root, file)
@@ -132,17 +130,17 @@ func TestARCH003And004ServiceImportBoundaries(t *testing.T) {
 func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 	root := repositoryRoot(t)
 	allowed := map[string]map[string]bool{
-		"auth":       set("users", "external_identities"),
-		"room":       set("live_rooms", "live_sessions", "room_bans", "room_mutes"),
-		"gift":       set("gifts", "gift_orders", "wallets", "wallet_transactions", "outbox_events"),
-		"wallet":     set("wallets", "wallet_transactions"),
-		"danmaku":    set("danmaku_records"),
-		"eventdedup": set("processed_events"),
-		"like":       set("room_like_snapshots"),
-		"outbox":     set("outbox_events"),
-		"httpapi":    set("room_message_feed"),
-		"querymodel": set("user_display_projection"),
-		"videoapi":   set("videos", "video_stats"),
+		"auth":            set("users", "external_identities"),
+		"room":            set("live_rooms", "live_sessions", "room_bans", "room_mutes", "outbox_events"),
+		"gift":            set("gifts", "gift_orders", "wallets", "wallet_transactions", "outbox_events"),
+		"wallet":          set("wallets", "wallet_transactions"),
+		"danmaku":         set("danmaku_records"),
+		"eventdedup":      set("processed_events"),
+		"like":            set("room_like_snapshots"),
+		"outbox":          set("outbox_events"),
+		"httpapi":         set("room_message_feed"),
+		"querymodel":      set("user_display_projection"),
+		"videoprojection": set("fluxfeed_video_projection"),
 	}
 	schemaTables := set("room_message_feed", "user_display_projection")
 	createPattern := regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)`)

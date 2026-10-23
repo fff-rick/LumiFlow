@@ -40,6 +40,7 @@ FROM users WHERE username = ? LIMIT 1`, username).
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
+	u.Account = u.Username
 	return u, err
 }
 
@@ -52,6 +53,7 @@ FROM users WHERE id = ? LIMIT 1`, id).
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
+	u.Account = u.Username
 	return u, err
 }
 
@@ -67,14 +69,18 @@ func (r *Repository) SyncExternal(ctx context.Context, external ExternalUser) (U
 	if provider == "" || subject == "" || username == "" || nickname == "" || len(username) > 32 || len(nickname) > 64 || len(avatar) > 512 {
 		return User{}, ErrInvalidInput
 	}
+	status := 1
+	if external.Enabled != nil && !*external.Enabled {
+		status = 2
+	}
 
 	var userID int64
 	err := r.db.QueryRowContext(ctx, `SELECT user_id FROM external_identities WHERE provider=? AND subject=? LIMIT 1`, provider, subject).Scan(&userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if _, err = r.db.ExecContext(ctx, `
 INSERT INTO users(username, nickname, avatar, password_hash, status, created_at, updated_at)
-VALUES (?, ?, ?, 'external-identity', 1, NOW(3), NOW(3))
-ON DUPLICATE KEY UPDATE nickname=VALUES(nickname), avatar=VALUES(avatar), status=1, updated_at=NOW(3)`, username, nickname, avatar); err != nil {
+VALUES (?, ?, ?, 'external-identity', ?, NOW(3), NOW(3))
+ON DUPLICATE KEY UPDATE nickname=VALUES(nickname), avatar=VALUES(avatar), status=VALUES(status), updated_at=NOW(3)`, username, nickname, avatar, status); err != nil {
 			return User{}, err
 		}
 		created, err := r.ByUsername(ctx, username)
@@ -93,7 +99,13 @@ ON DUPLICATE KEY UPDATE user_id=user_id, updated_at=NOW(3)`, provider, subject, 
 	} else if err != nil {
 		return User{}, err
 	}
-	if _, err = r.db.ExecContext(ctx, `UPDATE users SET nickname=?, avatar=?, status=1, updated_at=NOW(3) WHERE id=?`, nickname, avatar, userID); err != nil {
+	query := `UPDATE users SET nickname=?, avatar=?, updated_at=NOW(3) WHERE id=?`
+	args := []any{nickname, avatar, userID}
+	if external.Enabled != nil {
+		query = `UPDATE users SET nickname=?, avatar=?, status=?, updated_at=NOW(3) WHERE id=?`
+		args = []any{nickname, avatar, status, userID}
+	}
+	if _, err = r.db.ExecContext(ctx, query, args...); err != nil {
 		return User{}, err
 	}
 	return r.ByID(ctx, userID)

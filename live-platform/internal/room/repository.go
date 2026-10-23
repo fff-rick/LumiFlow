@@ -4,18 +4,26 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 )
 
 type DB interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-type Repository struct{ db DB }
+type Repository struct {
+	db               DB
+	integrationTopic string
+}
 
-func NewRepository(db DB) *Repository { return &Repository{db: db} }
+func NewRepository(db DB, integrationTopic string) *Repository {
+	return &Repository{db: db, integrationTopic: strings.TrimSpace(integrationTopic)}
+}
 
 func (r *Repository) Create(ctx context.Context, anchorID int64, title string) (Room, error) {
 	res, err := r.db.ExecContext(ctx, `
@@ -98,7 +106,15 @@ FROM live_rooms`
 	return items, nil
 }
 
-func (r *Repository) ChangeStatus(ctx context.Context, id, anchorID int64, from, to Status) error {
+func (r *Repository) ChangeStatus(ctx context.Context, value Room, from, to Status) error {
+	if r.integrationTopic == "" {
+		return errors.New("room integration topic is required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	query := `UPDATE live_rooms SET status=?, updated_at=NOW(3)`
 	if to == StatusLiving {
 		query += `, started_at=NOW(3), ended_at=NULL`
@@ -107,7 +123,7 @@ func (r *Repository) ChangeStatus(ctx context.Context, id, anchorID int64, from,
 		query += `, ended_at=NOW(3)`
 	}
 	query += ` WHERE id=? AND anchor_id=? AND status=?`
-	res, err := r.db.ExecContext(ctx, query, to, id, anchorID, from)
+	res, err := tx.ExecContext(ctx, query, to, value.ID, value.AnchorID, from)
 	if err != nil {
 		return err
 	}
@@ -118,7 +134,31 @@ func (r *Repository) ChangeStatus(ctx context.Context, id, anchorID int64, from,
 	if n == 0 {
 		return ErrInvalidState
 	}
-	return nil
+	var startedAt, endedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT started_at, ended_at FROM live_rooms WHERE id=?`, value.ID).Scan(&startedAt, &endedAt); err != nil {
+		return err
+	}
+	value.Status = to
+	if startedAt.Valid {
+		value.StartedAt = &startedAt.Time
+	}
+	if endedAt.Valid {
+		value.EndedAt = &endedAt.Time
+	}
+	eventType := EventTypeStarted
+	if to == StatusClosed {
+		eventType = EventTypeStopped
+	}
+	eventID, payload, err := newIntegrationEvent(eventType, value, time.Now())
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO outbox_events(event_id, aggregate_type, aggregate_id, event_type, topic, partition_key, payload, status, retry_count, next_retry_at, created_at)
+VALUES (?, 'ROOM', ?, ?, ?, ?, ?, 0, 0, NOW(3), NOW(3))`, eventID, strconv.FormatInt(value.ID, 10), eventType, r.integrationTopic, strconv.FormatInt(value.ID, 10), payload); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *Repository) Join(ctx context.Context, roomID, userID int64) error {

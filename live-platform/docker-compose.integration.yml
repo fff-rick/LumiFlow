@@ -1,6 +1,5 @@
-# Run with: docker compose -f docker-compose.yml -f docker-compose.integration.yml -p lumiflow up --build
-# This file adds FluxFeed to the LUMI network. FluxFeed keeps its own MySQL and
-# Redis, while both applications use the platform Kafka and observability stack.
+# Run from the repository root with `make up`. Only the loopback web entry is
+# published; APIs and infrastructure remain inside the Compose network.
 services:
   # Keep P2 runnable beside an existing standalone LUMI Compose project.
   mysql:
@@ -72,7 +71,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        for topic in fluxfeed.video fluxfeed.interaction fluxfeed.exposure fluxfeed.relation; do
+        for topic in fluxfeed.video fluxfeed.interaction fluxfeed.exposure fluxfeed.relation integration.identity.v1 integration.identity.v1.dlq integration.video.v1 integration.video.v1.dlq integration.room.v1 integration.room.v1.dlq; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic "$$topic" --partitions 6 --replication-factor 1
         done
 
@@ -92,7 +91,13 @@ services:
       FLUXFEED_REDIS_ADDR: fluxfeed-redis:6379
       FLUXFEED_REDIS_PASSWORD: fluxfeed-redis-password
       FLUXFEED_KAFKA_BROKERS: kafka:19092
-      FLUXFEED_PUBLIC_URL: http://localhost:8080
+      # OAuth callbacks travel through the fused Next frontend's /api/oauth
+      # BFF, so FluxFeed must issue its callback URLs for that public origin.
+      FLUXFEED_PUBLIC_URL: "${FLUXFEED_PUBLIC_URL:-http://127.0.0.1:8080}"
+      FLUXFEED_GOOGLE_CLIENT_ID: "${FLUXFEED_GOOGLE_CLIENT_ID:-}"
+      FLUXFEED_GOOGLE_CLIENT_SECRET: "${FLUXFEED_GOOGLE_CLIENT_SECRET:-}"
+      FLUXFEED_GITHUB_CLIENT_ID: "${FLUXFEED_GITHUB_CLIENT_ID:-}"
+      FLUXFEED_GITHUB_CLIENT_SECRET: "${FLUXFEED_GITHUB_CLIENT_SECRET:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_EXPORTER_OTLP_INSECURE: "true"
     volumes:
@@ -127,10 +132,43 @@ services:
   live-api:
     environment:
       FLUXFEED_BASE_URL: http://fluxfeed-api:8080
-    ports: !override ["${LUMIFLOW_API_PORT:-18080}:8080"]
+    ports: !reset []
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
     depends_on:
       fluxfeed-api: {condition: service_healthy}
       fluxfeed-worker: {condition: service_started}
+
+  lumiflow-web:
+    build:
+      context: ../frontend/next-app
+      dockerfile: Dockerfile
+    environment:
+      LUMIFLOW_API_ORIGIN: http://live-api:8080
+    ports:
+      - "127.0.0.1:${LUMIFLOW_WEB_PORT:-8080}:3000"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      live-api: {condition: service_healthy}
 
 volumes:
   fluxfeed_mysql_data:

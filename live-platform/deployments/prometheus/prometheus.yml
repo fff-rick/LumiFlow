@@ -19,10 +19,6 @@ scrape_configs:
     static_configs:
       - targets: ["live-query:8084"]
 
-  - job_name: live-video
-    static_configs:
-      - targets: ["live-video:8085"]
-
   - job_name: fluxfeed-api
     static_configs:
       - targets: ["fluxfeed-api:8080"]

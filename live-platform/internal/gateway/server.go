@@ -26,7 +26,6 @@ type Deps struct {
 	InteractionURL  string
 	IdentityRoomURL string
 	QueryURL        string
-	VideoURL        string
 	FluxFeedURL     string
 	InternalToken   string
 	BridgeJWTSecret string
@@ -66,19 +65,44 @@ func New(d Deps) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	video, err := s.proxy("video", d.VideoURL, "VIDEO_UNAVAILABLE")
+	fluxContent, err := s.fluxContentProxy(d.FluxFeedURL)
 	if err != nil {
 		return nil, err
 	}
-	var fluxContent http.Handler
-	if strings.TrimSpace(d.FluxFeedURL) != "" {
-		fluxContent, err = s.fluxContentProxy(d.FluxFeedURL)
-		if err != nil {
-			return nil, err
-		}
+	fluxAuth, err := s.fluxAuthProxy(d.FluxFeedURL)
+	if err != nil {
+		return nil, err
 	}
-	s.routes(identity, interaction, commerce, query, video, fluxContent)
+	s.routes(identity, interaction, commerce, query, fluxContent, fluxAuth)
 	return s, nil
+}
+
+// fluxAuthProxy keeps FluxFeed as the owner of password and OAuth sessions.
+// The Next BFF forwards its Set-Cookie headers to the browser so OAuth state
+// remains bound to the public LumiFlow origin.
+func (s *Server) fluxAuthProxy(rawURL string) (http.Handler, error) {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		return nil, fmt.Errorf("invalid fluxfeed upstream URL %q", rawURL)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		path := r.URL.Path
+		director(r)
+		switch {
+		case strings.HasPrefix(path, "/api/v1/auth/"):
+			r.URL.Path = "/api/auth/" + strings.TrimPrefix(path, "/api/v1/auth/")
+		case strings.HasPrefix(path, "/api/v1/oauth/"):
+			r.URL.Path = "/api/oauth/" + strings.TrimPrefix(path, "/api/v1/oauth/")
+		}
+		r.URL.RawPath = ""
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		s.log.ErrorContext(r.Context(), "upstream proxy failed", "upstream", "fluxfeed-auth", "error", err)
+		writeError(w, http.StatusBadGateway, "FLUXFEED_UNAVAILABLE", "authentication service unavailable")
+	}
+	return proxy, nil
 }
 
 func (s *Server) proxy(name, rawURL, errorCode string) (http.Handler, error) {
@@ -132,7 +156,7 @@ func (s *Server) fluxContentProxy(rawURL string) (http.Handler, error) {
 	return proxy, nil
 }
 
-func (s *Server) routes(identity, interaction, commerce, query, video, fluxContent http.Handler) {
+func (s *Server) routes(identity, interaction, commerce, query, fluxContent, fluxAuth http.Handler) {
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "milestone": "M8"})
 	})
@@ -143,8 +167,12 @@ func (s *Server) routes(identity, interaction, commerce, query, video, fluxConte
 		s.mux.Handle("GET /metrics", s.metrics.Handler())
 	}
 
-	s.mux.Handle("POST /api/v1/auth/register", s.authEndpoint(identity, true))
-	s.mux.Handle("POST /api/v1/auth/login", s.authEndpoint(identity, false))
+	s.mux.Handle("POST /api/v1/auth/register", s.authEndpoint(true))
+	s.mux.Handle("POST /api/v1/auth/login", s.authEndpoint(false))
+	s.mux.Handle("GET /api/v1/auth/capabilities", fluxAuth)
+	s.mux.Handle("POST /api/v1/auth/oauth/sessions", fluxAuth)
+	s.mux.Handle("GET /api/v1/oauth/{provider}", fluxAuth)
+	s.mux.Handle("GET /api/v1/oauth/{provider}/callback", fluxAuth)
 	s.mux.Handle("GET /api/v1/me", s.protected(identity))
 	s.mux.Handle("POST /api/v1/realtime/token", s.protected(identity))
 	s.mux.Handle("POST /api/v1/rooms", s.protected(identity))
@@ -177,22 +205,16 @@ func (s *Server) routes(identity, interaction, commerce, query, video, fluxConte
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/viewers", query)
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/stats", query)
 
-	videoAPI := video
-	protectedVideoAPI := s.protected(video)
-	if fluxContent != nil {
-		videoAPI = fluxContent
-		protectedVideoAPI = fluxContent
-		s.mux.Handle("POST /api/v1/content-assets", fluxContent)
-		s.mux.Handle("GET /api/v1/feed-items", fluxContent)
-		s.mux.Handle("PUT /api/v1/videos/{video_id}/like", fluxContent)
-		s.mux.Handle("DELETE /api/v1/videos/{video_id}/like", fluxContent)
-		s.mux.Handle("GET /api/v1/content-assets/{asset...}", fluxContent)
-	}
-	s.mux.Handle("POST /api/v1/videos", protectedVideoAPI)
-	s.mux.Handle("GET /api/v1/videos/{video_id}", videoAPI)
-	s.mux.Handle("DELETE /api/v1/videos/{video_id}", protectedVideoAPI)
-	s.mux.Handle("GET /api/v1/users/me/videos", protectedVideoAPI)
-	s.mux.Handle("GET /api/v1/users/{user_id}/videos", videoAPI)
+	s.mux.Handle("POST /api/v1/content-assets", fluxContent)
+	s.mux.Handle("GET /api/v1/feed-items", fluxContent)
+	s.mux.Handle("PUT /api/v1/videos/{video_id}/like", fluxContent)
+	s.mux.Handle("DELETE /api/v1/videos/{video_id}/like", fluxContent)
+	s.mux.Handle("GET /api/v1/content-assets/{asset...}", fluxContent)
+	s.mux.Handle("POST /api/v1/videos", fluxContent)
+	s.mux.Handle("GET /api/v1/videos/{video_id}", fluxContent)
+	s.mux.Handle("DELETE /api/v1/videos/{video_id}", fluxContent)
+	s.mux.Handle("GET /api/v1/users/me/videos", fluxContent)
+	s.mux.Handle("GET /api/v1/users/{user_id}/videos", fluxContent)
 
 	for _, pattern := range []string{"GET /internal/", "POST /internal/", "PUT /internal/", "PATCH /internal/", "DELETE /internal/"} {
 		s.mux.HandleFunc(pattern, http.NotFound)
@@ -200,10 +222,7 @@ func (s *Server) routes(identity, interaction, commerce, query, video, fluxConte
 	s.mux.Handle("GET /", webui.Handler())
 }
 
-func (s *Server) authEndpoint(legacy http.Handler, register bool) http.Handler {
-	if s.bridge == nil {
-		return legacy
-	}
+func (s *Server) authEndpoint(register bool) http.Handler {
 	if register {
 		return http.HandlerFunc(s.register)
 	}

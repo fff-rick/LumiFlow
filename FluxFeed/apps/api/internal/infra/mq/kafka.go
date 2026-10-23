@@ -336,6 +336,9 @@ func eventPartitionKey(event *applicationeventbus.Event) string {
 	if event.VideoID > 0 {
 		return strconv.FormatInt(event.VideoID, 10)
 	}
+	if event.RoomID > 0 {
+		return strconv.FormatInt(event.RoomID, 10)
+	}
 	if event.UserID > 0 {
 		return strconv.FormatInt(event.UserID, 10)
 	}

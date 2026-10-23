@@ -23,7 +23,7 @@ type RoomRepository interface {
 	Create(context.Context, int64, string) (Room, error)
 	ByID(context.Context, int64) (Room, error)
 	List(context.Context, Status, int) ([]Room, error)
-	ChangeStatus(context.Context, int64, int64, Status, Status) error
+	ChangeStatus(context.Context, Room, Status, Status) error
 	Join(context.Context, int64, int64) error
 	IsMuted(context.Context, int64, int64) (bool, error)
 	IsBanned(context.Context, int64, int64) (bool, error)
@@ -100,28 +100,28 @@ func (s *Service) List(ctx context.Context, status Status, limit int) ([]Room, e
 }
 
 func (s *Service) Start(ctx context.Context, id, actorID int64) (Room, error) {
-	v, err := s.repo.ByID(ctx, id)
+	v, err := s.Get(ctx, id)
 	if err != nil {
 		return Room{}, err
 	}
 	if v.AnchorID != actorID {
 		return Room{}, ErrForbidden
 	}
-	if err := s.repo.ChangeStatus(ctx, id, actorID, StatusPreparing, StatusLiving); err != nil {
+	if err := s.repo.ChangeStatus(ctx, v, StatusPreparing, StatusLiving); err != nil {
 		return Room{}, err
 	}
 	return s.Get(ctx, id)
 }
 
 func (s *Service) Stop(ctx context.Context, id, actorID int64) (Room, error) {
-	v, err := s.repo.ByID(ctx, id)
+	v, err := s.Get(ctx, id)
 	if err != nil {
 		return Room{}, err
 	}
 	if v.AnchorID != actorID {
 		return Room{}, ErrForbidden
 	}
-	if err := s.repo.ChangeStatus(ctx, id, actorID, StatusLiving, StatusClosed); err != nil {
+	if err := s.repo.ChangeStatus(ctx, v, StatusLiving, StatusClosed); err != nil {
 		return Room{}, err
 	}
 	return s.Get(ctx, id)

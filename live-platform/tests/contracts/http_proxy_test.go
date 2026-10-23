@@ -29,7 +29,8 @@ func TestGatewayAndServicesKeepAuthenticationContractOverHTTP(t *testing.T) {
 	t.Cleanup(commerce.Close)
 
 	gatewayServer, err := gateway.New(gateway.Deps{
-		Log: testLogger(), IdentityRoomURL: identity.URL, InteractionURL: interaction.URL, CommerceURL: commerce.URL, QueryURL: identity.URL, VideoURL: identity.URL,
+		Log: testLogger(), IdentityRoomURL: identity.URL, InteractionURL: interaction.URL, CommerceURL: commerce.URL, QueryURL: identity.URL,
+		FluxFeedURL: identity.URL, InternalToken: "contract-internal", BridgeJWTSecret: "contract-secret", BridgeTokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +74,14 @@ func TestGatewayPreservesUpstreamHTTPContract(t *testing.T) {
 	observed := map[string]observedRequest{}
 	upstream := func(name string, status int, code string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if name == "video" && r.URL.Path == "/api/users/me" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "account": "contract@example.com", "nickname": "contract"})
+				return
+			}
+			if name == "identity" && r.URL.Path == "/internal/v1/users/fluxfeed-sync" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "username": "fluxfeed:9", "nickname": "contract"})
+				return
+			}
 			raw, _ := io.ReadAll(r.Body)
 			mu.Lock()
 			observed[name] = observedRequest{r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key"), r.Header.Get("X-Request-ID"), r.Header.Get("X-User-ID"), string(raw)}
@@ -94,7 +103,8 @@ func TestGatewayPreservesUpstreamHTTPContract(t *testing.T) {
 	t.Cleanup(video.Close)
 
 	gatewayServer, err := gateway.New(gateway.Deps{
-		Log: testLogger(), IdentityRoomURL: identity.URL, InteractionURL: interaction.URL, CommerceURL: commerce.URL, QueryURL: query.URL, VideoURL: video.URL,
+		Log: testLogger(), IdentityRoomURL: identity.URL, InteractionURL: interaction.URL, CommerceURL: commerce.URL, QueryURL: query.URL,
+		FluxFeedURL: video.URL, InternalToken: "contract-internal", BridgeJWTSecret: "contract-secret", BridgeTokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +116,6 @@ func TestGatewayPreservesUpstreamHTTPContract(t *testing.T) {
 		name, path, body, code string
 		status                 int
 	}{
-		{"identity", "/api/v1/auth/register", `{"username":"same"}`, "USERNAME_TAKEN", http.StatusConflict},
 		{"interaction", "/api/v1/rooms/9/danmaku", `{"content":"blocked"}`, "SENSITIVE_CONTENT", http.StatusUnprocessableEntity},
 		{"commerce", "/api/v1/rooms/9/gifts", `{"gift_id":1,"count":1}`, "GIFT_RATE_LIMITED", http.StatusTooManyRequests},
 		{"query", "/api/v1/rooms/9/stats", `{"unused":true}`, "STATS_UNAVAILABLE", http.StatusServiceUnavailable},
@@ -141,8 +150,19 @@ func TestGatewayPreservesUpstreamHTTPContract(t *testing.T) {
 			mu.Lock()
 			got := observed[tc.name]
 			mu.Unlock()
-			if got.path != tc.path || got.authorization != "Bearer opaque-contract-token" || got.idempotencyKey != "idem-1" || got.requestID != "request-contract-1" || got.userID != "" || got.body != tc.body {
+			wantPath := tc.path
+			if tc.name == "video" {
+				wantPath = "/api/videos"
+			}
+			if got.path != wantPath || got.idempotencyKey != "idem-1" || got.requestID != "request-contract-1" || got.userID != "" || got.body != tc.body {
 				t.Fatalf("upstream request changed: %+v", got)
+			}
+			if tc.name == "interaction" || tc.name == "commerce" {
+				if got.authorization == "Bearer opaque-contract-token" || got.authorization == "" {
+					t.Fatalf("protected LUMI route kept FluxFeed token: %+v", got)
+				}
+			} else if got.authorization != "Bearer opaque-contract-token" {
+				t.Fatalf("FluxFeed/query route changed caller token: %+v", got)
 			}
 		})
 	}
@@ -151,7 +171,8 @@ func TestGatewayPreservesUpstreamHTTPContract(t *testing.T) {
 func TestGatewayDoesNotExposeInternalRoutes(t *testing.T) {
 	server, err := gateway.New(gateway.Deps{
 		Log: testLogger(), IdentityRoomURL: "http://127.0.0.1:1", InteractionURL: "http://127.0.0.1:1",
-		CommerceURL: "http://127.0.0.1:1", QueryURL: "http://127.0.0.1:1", VideoURL: "http://127.0.0.1:1",
+		CommerceURL: "http://127.0.0.1:1", QueryURL: "http://127.0.0.1:1", FluxFeedURL: "http://127.0.0.1:1",
+		InternalToken: "contract-internal", BridgeJWTSecret: "contract-secret", BridgeTokenTTL: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)

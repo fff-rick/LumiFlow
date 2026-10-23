@@ -1,7 +1,9 @@
 package infraaccount
 
 import (
+	applicationeventbus "FluxFeed/internal/application/eventbus"
 	domainaccount "FluxFeed/internal/domain/account"
+	infraoutbox "FluxFeed/internal/infra/persistence/outbox"
 	"context"
 	"errors"
 	"time"
@@ -11,7 +13,9 @@ import (
 )
 
 type Repository struct {
-	db *gorm.DB
+	db            *gorm.DB
+	outbox        *infraoutbox.Repository
+	identityTopic string
 }
 
 type userWithStatModel struct {
@@ -32,6 +36,11 @@ type userWithStatModel struct {
 // New 创建账号仓储实现，db 由路由装配阶段注入。
 func New(db *gorm.DB) *Repository {
 	return &Repository{db: db}
+}
+
+func (r *Repository) EnableIdentityOutbox(outbox *infraoutbox.Repository, topic string) {
+	r.outbox = outbox
+	r.identityTopic = topic
 }
 
 // Save 将领域用户转换为 GORM 模型并写入 account 表。
@@ -99,21 +108,25 @@ func (r *Repository) FindByID(ctx context.Context, id int64) (*domainaccount.Use
 
 // UpdateProfile 只更新资料字段，账号、密码、角色等字段保持原值。
 func (r *Repository) UpdateProfile(ctx context.Context, user *domainaccount.User) error {
-	result := r.db.WithContext(ctx).
-		Model(&UserModel{}).
-		Where("id = ?", user.ID).
-		Updates(map[string]any{
-			"nickname":   user.Nickname,
-			"avatar_url": user.AvatarURL,
-			"bio":        user.Bio,
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&UserModel{}).Where("id = ?", user.ID).Updates(map[string]any{
+			"nickname": user.Nickname, "avatar_url": user.AvatarURL, "bio": user.Bio,
 		})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return domainaccount.ErrUserNotFound
-	}
-	return nil
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return domainaccount.ErrUserNotFound
+		}
+		if r.outbox == nil || r.identityTopic == "" {
+			return nil
+		}
+		event, err := applicationeventbus.NewIdentityEvent(applicationeventbus.TypeIdentityProfileChanged, user.ID, time.Now(), applicationeventbus.IdentityPayload{Account: user.Account, Nickname: user.Nickname, AvatarURL: user.AvatarURL})
+		if err != nil {
+			return err
+		}
+		return r.outbox.Add(tx, r.identityTopic, event)
+	})
 }
 
 func (r *Repository) UpdatePassword(ctx context.Context, user *domainaccount.User) error {

@@ -14,7 +14,6 @@ type Config struct {
 	Interaction   InteractionConfig
 	IdentityRoom  IdentityRoomConfig
 	Query         QueryConfig
-	Video         VideoConfig
 	MySQL         MySQLConfig
 	Databases     DatabaseConfig
 	Redis         RedisConfig
@@ -40,7 +39,6 @@ type GatewayConfig struct {
 	Interaction   InteractionConfig
 	IdentityRoom  IdentityRoomConfig
 	Query         QueryConfig
-	Video         VideoConfig
 	Auth          AuthConfig
 	Observability ObservabilityConfig
 }
@@ -61,7 +59,6 @@ type InteractionConfig struct {
 }
 type IdentityRoomConfig struct{ HTTPAddr, BaseURL string }
 type QueryConfig struct{ HTTPAddr, BaseURL string }
-type VideoConfig struct{ HTTPAddr, BaseURL string }
 type MySQLConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -74,7 +71,6 @@ type DatabaseConfig struct {
 	ArchiveDSN     string
 	QueryDSN       string
 	QueryWriterDSN string
-	VideoDSN       string
 }
 type RedisConfig struct {
 	URL            string
@@ -112,16 +108,21 @@ type LikeConfig struct {
 }
 type WalletConfig struct{ DevCreditEnabled bool }
 type KafkaConfig struct {
-	Brokers              []string
-	DanmakuTopic         string
-	GiftTopic            string
-	DanmakuConsumerGroup string
-	GiftConsumerGroup    string
-	ConsumerLease        time.Duration
-	TLSEnabled           bool
-	SASLMechanism        string
-	SASLUsername         string
-	SASLPassword         string
+	Brokers                       []string
+	DanmakuTopic                  string
+	GiftTopic                     string
+	IdentityTopic                 string
+	VideoIntegrationTopic         string
+	RoomIntegrationTopic          string
+	DanmakuConsumerGroup          string
+	GiftConsumerGroup             string
+	IdentityConsumerGroup         string
+	VideoIntegrationConsumerGroup string
+	ConsumerLease                 time.Duration
+	TLSEnabled                    bool
+	SASLMechanism                 string
+	SASLUsername                  string
+	SASLPassword                  string
 }
 
 type WorkerConfig struct {
@@ -182,7 +183,6 @@ func LoadGateway() (GatewayConfig, error) {
 		Interaction:   InteractionConfig{BaseURL: env("INTERACTION_BASE_URL", "http://localhost:8082")},
 		IdentityRoom:  IdentityRoomConfig{BaseURL: env("IDENTITY_ROOM_BASE_URL", "http://localhost:8083")},
 		Query:         QueryConfig{BaseURL: env("QUERY_BASE_URL", "http://localhost:8084")},
-		Video:         VideoConfig{BaseURL: env("VIDEO_BASE_URL", "http://localhost:8085")},
 		Auth:          AuthConfig{JWTSecret: env("AUTH_JWT_SECRET", "dev-app-jwt-secret-change-me"), TokenTTL: tokenTTL, FluxFeedBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FLUXFEED_BASE_URL")), "/"), InternalToken: strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))},
 		Observability: observability,
 	}, nil
@@ -308,12 +308,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("GIFT_USER_RATE_WINDOW must be a positive duration")
 	}
 
-	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,gift-consumer,danmaku-consumer"))
+	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection"))
 	if len(workerRoles) == 0 {
 		return Config{}, fmt.Errorf("WORKER_ROLES must contain at least one role")
 	}
 	allowedWorkerRoles := map[string]struct{}{
-		"stats": {}, "like-snapshot": {}, "outbox": {}, "gift-consumer": {}, "danmaku-consumer": {},
+		"stats": {}, "like-snapshot": {}, "outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {},
 	}
 	seenWorkerRoles := make(map[string]struct{}, len(workerRoles))
 	for i, role := range workerRoles {
@@ -346,7 +346,7 @@ func Load() (Config, error) {
 	if rawRoles := strings.TrimSpace(os.Getenv("WORKER_ROLES")); rawRoles != "" {
 		needsKafkaCredentials = false
 		for _, role := range workerRoles {
-			if role == "outbox" || role == "gift-consumer" || role == "danmaku-consumer" {
+			if role == "outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" {
 				needsKafkaCredentials = true
 				break
 			}
@@ -442,7 +442,6 @@ func Load() (Config, error) {
 		Interaction:  InteractionConfig{HTTPAddr: env("INTERACTION_HTTP_ADDR", ":8082"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("INTERACTION_BASE_URL")), "/")},
 		IdentityRoom: IdentityRoomConfig{HTTPAddr: env("IDENTITY_ROOM_HTTP_ADDR", ":8083"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("IDENTITY_ROOM_BASE_URL")), "/")},
 		Query:        QueryConfig{HTTPAddr: env("QUERY_HTTP_ADDR", ":8084"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("QUERY_BASE_URL")), "/")},
-		Video:        VideoConfig{HTTPAddr: env("VIDEO_HTTP_ADDR", ":8085"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("VIDEO_BASE_URL")), "/")},
 		MySQL: MySQLConfig{
 			MaxOpenConns:    mysqlMaxOpenConns,
 			MaxIdleConns:    mysqlMaxIdleConns,
@@ -455,7 +454,6 @@ func Load() (Config, error) {
 			ArchiveDSN:     env("ARCHIVE_MYSQL_DSN", "live_archive_app:archive-app@tcp(mysql:3306)/archive?parseTime=true&charset=utf8mb4"),
 			QueryDSN:       env("QUERY_MYSQL_DSN", "live_query_audit:query-audit@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"),
 			QueryWriterDSN: env("QUERY_WRITER_MYSQL_DSN", "live_query_app:query-app@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"),
-			VideoDSN:       env("VIDEO_MYSQL_DSN", "live_video_app:video-app@tcp(mysql:3306)/video?parseTime=true&charset=utf8mb4"),
 		},
 		Redis: RedisConfig{URL: os.Getenv("REDIS_URL"), Addr: env("REDIS_ADDR", "redis:6379"), Password: os.Getenv("REDIS_PASSWORD"), DB: db},
 		Centrifugo: CentrifugoConfig{
@@ -472,16 +470,21 @@ func Load() (Config, error) {
 		Engagement: EngagementConfig{ViewerTTL: viewerTTL, StatsInterval: statsInterval, ActiveRoomWindow: activeRoomWindow, ActiveRoomBatch: activeRoomBatch, ActiveRoomShards: activeRoomShards, LikeSnapshotInterval: likeSnapshotInterval},
 		Wallet:     WalletConfig{DevCreditEnabled: devCreditEnabled},
 		Kafka: KafkaConfig{
-			Brokers:              kafkaBrokers,
-			DanmakuTopic:         env("KAFKA_DANMAKU_TOPIC", "live.danmaku.v1"),
-			GiftTopic:            env("KAFKA_GIFT_TOPIC", "live.gift.v1"),
-			DanmakuConsumerGroup: env("KAFKA_DANMAKU_CONSUMER_GROUP", "live-danmaku-persist-v1"),
-			GiftConsumerGroup:    env("KAFKA_GIFT_CONSUMER_GROUP", "live-gift-realtime-v1"),
-			ConsumerLease:        consumerLease,
-			TLSEnabled:           kafkaTLSEnabled,
-			SASLMechanism:        kafkaSASLMechanism,
-			SASLUsername:         os.Getenv("KAFKA_SASL_USERNAME"),
-			SASLPassword:         os.Getenv("KAFKA_SASL_PASSWORD"),
+			Brokers:                       kafkaBrokers,
+			DanmakuTopic:                  env("KAFKA_DANMAKU_TOPIC", "live.danmaku.v1"),
+			GiftTopic:                     env("KAFKA_GIFT_TOPIC", "live.gift.v1"),
+			IdentityTopic:                 env("KAFKA_IDENTITY_TOPIC", "integration.identity.v1"),
+			VideoIntegrationTopic:         env("KAFKA_VIDEO_INTEGRATION_TOPIC", "integration.video.v1"),
+			RoomIntegrationTopic:          env("KAFKA_ROOM_INTEGRATION_TOPIC", "integration.room.v1"),
+			DanmakuConsumerGroup:          env("KAFKA_DANMAKU_CONSUMER_GROUP", "live-danmaku-persist-v1"),
+			GiftConsumerGroup:             env("KAFKA_GIFT_CONSUMER_GROUP", "live-gift-realtime-v1"),
+			IdentityConsumerGroup:         env("KAFKA_IDENTITY_CONSUMER_GROUP", "lumi-identity-projection-v1"),
+			VideoIntegrationConsumerGroup: env("KAFKA_VIDEO_INTEGRATION_CONSUMER_GROUP", "lumi-video-projection-v1"),
+			ConsumerLease:                 consumerLease,
+			TLSEnabled:                    kafkaTLSEnabled,
+			SASLMechanism:                 kafkaSASLMechanism,
+			SASLUsername:                  os.Getenv("KAFKA_SASL_USERNAME"),
+			SASLPassword:                  os.Getenv("KAFKA_SASL_PASSWORD"),
 		},
 		Outbox:        OutboxConfig{PollInterval: outboxPoll, BatchSize: outboxBatch, Lease: outboxLease, ProduceTimeout: outboxProduceTimeout},
 		Traffic:       TrafficConfig{HotViewers: hotViewers, ProtectViewers: protectViewers, HotDanmakuRate: hotRate, ProtectDanmakuRate: protectRate, HotSampleRate: hotSample, ProtectSampleRate: protectSample, RateWindow: rateWindow, AdaptiveEnabled: adaptiveEnabled, TargetFanoutRate: targetFanout, HotFanoutRate: hotFanout, ProtectFanoutRate: protectFanout, MinSampleRate: minSampleRate},
