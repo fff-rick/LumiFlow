@@ -135,8 +135,9 @@ type WorkerConfig struct {
 	Roles []string
 }
 type ProjectionConfig struct {
-	Mode         string
-	MaxStaleness time.Duration
+	InteractionMode string
+	CommerceMode    string
+	MaxStaleness    time.Duration
 }
 type TrafficConfig struct {
 	HotViewers         int64
@@ -321,9 +322,17 @@ func Load() (Config, error) {
 	if err != nil || projectionMaxStaleness <= 0 {
 		return Config{}, fmt.Errorf("PROJECTION_MAX_STALENESS must be a positive duration")
 	}
-	projectionMode := strings.ToLower(strings.TrimSpace(env("PROJECTION_MODE", "shadow")))
-	if projectionMode != "shadow" && projectionMode != "prefer" {
-		return Config{}, fmt.Errorf("PROJECTION_MODE must be one of: shadow, prefer")
+	projectionMode, err := loadProjectionMode("PROJECTION_MODE", "shadow")
+	if err != nil {
+		return Config{}, err
+	}
+	interactionProjectionMode, err := loadProjectionMode("INTERACTION_PROJECTION_MODE", projectionMode)
+	if err != nil {
+		return Config{}, err
+	}
+	commerceProjectionMode, err := loadProjectionMode("COMMERCE_PROJECTION_MODE", projectionMode)
+	if err != nil {
+		return Config{}, err
 	}
 
 	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,identity-outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection,interaction-projection,commerce-projection"))
@@ -512,7 +521,7 @@ func Load() (Config, error) {
 		Outbox:        OutboxConfig{PollInterval: outboxPoll, BatchSize: outboxBatch, Lease: outboxLease, ProduceTimeout: outboxProduceTimeout},
 		Traffic:       TrafficConfig{HotViewers: hotViewers, ProtectViewers: protectViewers, HotDanmakuRate: hotRate, ProtectDanmakuRate: protectRate, HotSampleRate: hotSample, ProtectSampleRate: protectSample, RateWindow: rateWindow, AdaptiveEnabled: adaptiveEnabled, TargetFanoutRate: targetFanout, HotFanoutRate: hotFanout, ProtectFanoutRate: protectFanout, MinSampleRate: minSampleRate},
 		Worker:        WorkerConfig{Roles: workerRoles},
-		Projection:    ProjectionConfig{Mode: projectionMode, MaxStaleness: projectionMaxStaleness},
+		Projection:    ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, MaxStaleness: projectionMaxStaleness},
 		Observability: observability,
 	}, nil
 }
@@ -525,6 +534,14 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+func loadProjectionMode(key, fallback string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(env(key, fallback)))
+	if mode != "shadow" && mode != "prefer" {
+		return "", fmt.Errorf("%s must be one of: shadow, prefer", key)
+	}
+	return mode, nil
 }
 
 func env(key, fallback string) string {

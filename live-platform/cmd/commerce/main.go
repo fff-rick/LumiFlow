@@ -63,8 +63,8 @@ func main() {
 		}
 	}()
 
-	rooms := identityclient.New(cfg.IdentityRoom.BaseURL)
-	access := accessprojection.NewReader(accessprojection.NamespaceCommerce, redis, rooms, cfg.Projection.Mode, cfg.Projection.MaxStaleness, metrics)
+	rooms := identityclient.NewInternal(cfg.IdentityRoom.BaseURL, cfg.Auth.InternalToken)
+	access := accessprojection.NewReader(accessprojection.NamespaceCommerce, redis, rooms, cfg.Projection.CommerceMode, cfg.Projection.MaxStaleness, metrics)
 	gifts := gift.NewService(gift.NewRepository(mysql), access, redisstore.NewFixedWindowLimiter(redis), gift.Config{MaxCountPerRequest: cfg.Gift.MaxCountPerRequest, UserRateLimit: cfg.Gift.UserRateLimit, UserRateWindow: cfg.Gift.UserRateWindow}, cfg.Kafka.GiftTopic)
 	api := commerceapi.New(commerceapi.Deps{Log: log, Tokens: auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL), Gifts: gifts, Wallet: wallet.NewService(wallet.NewRepository(mysql), cfg.Wallet.DevCreditEnabled), Viewers: viewer.NewService(redis, cfg.Engagement.ViewerTTL), Metrics: metrics, MySQL: mysql, Redis: redis})
 	srv := &http.Server{Addr: cfg.Commerce.HTTPAddr, Handler: api.Handler(), ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}

@@ -1,0 +1,66 @@
+name: Live platform CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "live-platform/**"
+      - ".github/workflows/live-platform-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "live-platform/**"
+      - ".github/workflows/live-platform-ci.yml"
+
+concurrency:
+  group: live-platform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: live-platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: live-platform/go.mod
+          cache-dependency-path: live-platform/go.sum
+
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))"
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11
+          verify: true
+          working-directory: live-platform
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: make test
+
+      - name: Contract compatibility gate
+        run: make test-contracts
+
+      - name: Architecture boundary gate
+        run: make test-boundaries
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Pre-build image without exporting one
+        uses: docker/build-push-action@v6
+        with:
+          context: live-platform
+          push: false
+          outputs: type=cacheonly

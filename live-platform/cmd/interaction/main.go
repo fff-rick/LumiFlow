@@ -62,8 +62,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer producer.Close()
-	identity := identityclient.New(cfg.IdentityRoom.BaseURL)
-	access := accessprojection.NewReader(accessprojection.NamespaceInteraction, redis, identity, cfg.Projection.Mode, cfg.Projection.MaxStaleness, metrics)
+	identity := identityclient.NewInternal(cfg.IdentityRoom.BaseURL, cfg.Auth.InternalToken)
+	access := accessprojection.NewReader(accessprojection.NamespaceInteraction, redis, identity, cfg.Projection.InteractionMode, cfg.Projection.MaxStaleness, metrics)
 	limiter := redisstore.NewFixedWindowLimiter(redis)
 	policy := traffic.NewPolicy(redis, traffic.Config{HotViewers: cfg.Traffic.HotViewers, ProtectViewers: cfg.Traffic.ProtectViewers, HotDanmakuRate: cfg.Traffic.HotDanmakuRate, ProtectDanmakuRate: cfg.Traffic.ProtectDanmakuRate, HotSampleRate: cfg.Traffic.HotSampleRate, ProtectSampleRate: cfg.Traffic.ProtectSampleRate, RateWindow: cfg.Traffic.RateWindow, AdaptiveEnabled: cfg.Traffic.AdaptiveEnabled, TargetFanoutRate: cfg.Traffic.TargetFanoutRate, HotFanoutRate: cfg.Traffic.HotFanoutRate, ProtectFanoutRate: cfg.Traffic.ProtectFanoutRate, MinSampleRate: cfg.Traffic.MinSampleRate}, metrics)
 	publisher := realtime.NewCentrifugo(cfg.Centrifugo.APIURL, cfg.Centrifugo.APIKey, metrics)

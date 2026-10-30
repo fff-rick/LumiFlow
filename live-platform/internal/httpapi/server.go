@@ -160,10 +160,10 @@ func NewIdentityRoom(d Deps) http.Handler {
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/bans", s.requireAuth(s.banUser))
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/bans", s.requireAuth(s.listBans))
 	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.requireAuth(s.unbanUser))
-	s.mux.HandleFunc("POST /internal/v1/users/fluxfeed-sync", s.syncFluxFeedUser)
+	s.mux.HandleFunc("POST /internal/v1/users/fluxfeed-sync", s.requireInternal(s.syncFluxFeedUser))
 	// Internal, versioned read contract for the interaction migration. It is not
 	// exposed by the public gateway Service.
-	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}/access/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}/access/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
 		roomID, ok := pathInt64(w, r, "room_id")
 		if !ok {
 			return
@@ -178,9 +178,9 @@ func NewIdentityRoom(d Deps) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, access)
-	})
-	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}", s.getRoom)
-	s.mux.HandleFunc("GET /internal/v1/users/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}", s.requireInternal(s.getRoom))
+	s.mux.HandleFunc("GET /internal/v1/users/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := pathInt64(w, r, "user_id")
 		if !ok {
 			return
@@ -199,8 +199,8 @@ func NewIdentityRoom(d Deps) http.Handler {
 			Status    int       `json:"status"`
 			CreatedAt time.Time `json:"created_at"`
 		}{u.ID, u.Account, u.Username, u.Nickname, u.Avatar, u.Status, u.CreatedAt})
-	})
-	s.mux.HandleFunc("POST /internal/v1/rooms/{room_id}/join/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	s.mux.HandleFunc("POST /internal/v1/rooms/{room_id}/join/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
 		roomID, ok := pathInt64(w, r, "room_id")
 		if !ok {
 			return
@@ -215,7 +215,7 @@ func NewIdentityRoom(d Deps) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, v)
-	})
+	}))
 	return s.handler("live-identity-room")
 }
 
@@ -228,10 +228,6 @@ type syncFluxFeedUserRequest struct {
 }
 
 func (s *Server) syncFluxFeedUser(w http.ResponseWriter, r *http.Request) {
-	if s.internalToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Internal-Token")), []byte(s.internalToken)) != 1 {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid internal token")
-		return
-	}
 	var in syncFluxFeedUserRequest
 	if err := decodeJSON(w, r, 16<<10, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
@@ -251,6 +247,16 @@ func (s *Server) syncFluxFeedUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
+}
+
+func (s *Server) requireInternal(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.internalToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Internal-Token")), []byte(s.internalToken)) != 1 {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid internal token")
+			return
+		}
+		next(w, r)
+	}
 }
 
 // NewQuery owns the read routes that previously forced live-api to connect to

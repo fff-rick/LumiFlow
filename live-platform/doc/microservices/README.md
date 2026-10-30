@@ -8,7 +8,7 @@
 
 当前项目已经完成进程拆分、MySQL schema/账号隔离和 P3 首个事件投影切片，但仍存在三个会阻止完整故障隔离和独立扩缩容的问题：
 
-1. Commerce 和 Interaction 已具备 `shadow`/`prefer` 切流及差异指标，但全量快照重建和切流验收尚未完成。
+1. Commerce 和 Interaction 已具备独立的 `shadow`/`prefer` 切流及差异指标，但全量快照重建和切流验收尚未完成。
 2. Identity 与 Room 仍合并在一个进程，Presence 与 Interaction 也尚未拆开。
 3. Redis Key 仍使用历史共享 namespace；Query 的安全定义视图也需要由 Kafka 实体投影替换。
 
@@ -46,7 +46,7 @@
 | `cmd/api` | `live-gateway` | ✅ 只保留 Web UI、健康检查、指标和固定上游代理，不再连接业务数据源 |
 | `cmd/identityroom` | `live-identity` + `live-room` | ⚠️ 已使用两个 schema/账号和独立 Repository，但仍绑定在同一进程 |
 | `cmd/interaction` | `live-presence` + `live-interaction` | ⚠️ 房间/治理/身份支持影子比对和投影优先切流，但在线与弹幕点赞负载仍混在同一进程 |
-| `cmd/commerce` | `live-commerce` | ✅ 交易使用独立 schema，房间/治理支持影子比对和投影优先切流，缺失或陈旧时内部 HTTP 兜底 |
+| `cmd/commerce` | `live-commerce` | ✅ 交易使用独立 schema，房间/治理支持影子比对和投影优先切流，缺失或陈旧时通过带服务认证的内部 HTTP 兜底 |
 | `cmd/worker` | 服务所有者的独立 Worker Deployment | ⚠️ 角色开关和 K8s 清单存在，Compose 仍合并运行 |
 | `cmd/query` | `live-query` | ⚠️ 已使用独立只读账号；安全定义视图在 P3 替换为 Kafka 实体投影 |
 | FluxFeed 视频域 | FluxFeed API / Worker | ✅ 网关仅按白名单路由转发，LUMI 不保留视频 schema 或视频服务 |

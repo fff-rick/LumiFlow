@@ -65,9 +65,7 @@ func (r *Reader) Get(ctx context.Context, roomID int64) (room.Room, error) {
 	}
 	value, fallbackErr := r.fallback.Get(ctx, roomID)
 	r.observeFallback("room", fallbackErr)
-	if fallbackErr == nil {
-		r.snapshotRoom(ctx, value, record, exists)
-	} else {
+	if fallbackErr != nil {
 		r.failClosed("room")
 	}
 	return value, fallbackErr
@@ -92,10 +90,7 @@ func (r *Reader) GetRoomAccess(ctx context.Context, roomID, userID int64) (room.
 	}
 	value, fallbackErr := r.fallback.GetRoomAccess(ctx, roomID, userID)
 	r.observeFallback("room_access", fallbackErr)
-	if fallbackErr == nil {
-		r.snapshotRoom(ctx, value.Room, roomRecord, roomExists)
-		r.snapshot(ctx, governanceKey(r.namespace, roomID, userID), projectionevent.GovernancePayload{RoomID: roomID, UserID: userID, Banned: value.Banned, Muted: value.Muted}, governanceRecord, governanceExists)
-	} else {
+	if fallbackErr != nil {
 		r.failClosed("room_access")
 	}
 	return value, fallbackErr
@@ -128,9 +123,7 @@ func (r *Reader) User(ctx context.Context, userID int64) (auth.User, error) {
 	}
 	value, fallbackErr := r.fallback.User(ctx, userID)
 	r.observeFallback("identity", fallbackErr)
-	if fallbackErr == nil {
-		r.snapshot(ctx, identityKey(r.namespace, userID), projectionevent.IdentityPayload{UserID: value.ID, Nickname: value.Nickname, Avatar: value.Avatar, Status: value.Status}, record, exists)
-	} else {
+	if fallbackErr != nil {
 		r.failClosed("identity")
 	}
 	return value, fallbackErr
@@ -249,22 +242,6 @@ func roomEquivalent(a, b room.Room) bool {
 
 func timePtrEqual(a, b *time.Time) bool {
 	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
-}
-
-func (r *Reader) snapshotRoom(ctx context.Context, value room.Room, record redisstore.ProjectionRecord, exists bool) {
-	r.snapshot(ctx, roomKey(r.namespace, value.ID), projectionevent.RoomPayload{RoomID: value.ID, AnchorID: value.AnchorID, Title: value.Title, Status: string(value.Status), StartedAt: value.StartedAt, EndedAt: value.EndedAt, CreatedAt: value.CreatedAt}, record, exists)
-}
-
-func (r *Reader) snapshot(ctx context.Context, key string, payload any, record redisstore.ProjectionRecord, exists bool) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	if exists {
-		_, _ = r.store.RefreshProjection(ctx, key, record.Version, r.now().UTC(), raw)
-	} else {
-		_, _ = r.store.ApplyProjection(ctx, key, redisstore.ProjectionRecord{Version: 0, ProjectedAt: r.now().UTC(), Topic: "snapshot", Partition: -1, Offset: -1, Payload: raw})
-	}
 }
 
 func (r *Reader) Create(ctx context.Context, anchorID int64, title string) (room.Room, error) {

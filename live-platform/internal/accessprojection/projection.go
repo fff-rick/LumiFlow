@@ -26,7 +26,6 @@ type Topics struct {
 
 type Store interface {
 	ApplyProjection(context.Context, string, redisstore.ProjectionRecord) (bool, error)
-	RefreshProjection(context.Context, string, int64, time.Time, []byte) (bool, error)
 	LoadProjection(context.Context, string) (redisstore.ProjectionRecord, bool, error)
 }
 

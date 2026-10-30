@@ -150,8 +150,10 @@
 
 已落地 Identity、Room、Governance 事务 Outbox，两个独立 consumer group 分别维护
 Interaction 与 Commerce 的 Redis 投影。`PROJECTION_MODE=shadow` 默认保持权威 API
-响应并旁路比对投影，显式切为 `prefer` 后才采用投影优先、缺失或超过 5 分钟时
-内部 HTTP 兜底并 fail closed。读命中/陈旧、回源、影子差异、投影年龄、乱序丢弃、
+响应并旁路比对投影，也可用 `INTERACTION_PROJECTION_MODE` 和
+`COMMERCE_PROJECTION_MODE` 分别灰度。显式切为 `prefer` 后才采用投影优先、缺失或
+超过 5 分钟时通过带服务认证的内部 HTTP 兜底并 fail closed。权威 API 不返回聚合
+版本，因此兜底结果不会反写版本化投影，避免迟到事件造成状态回退。读命中/陈旧、回源、影子差异、投影年龄、乱序丢弃、
 Kafka lag 和 fail-closed 均已有指标。尚未完成权威数据全量快照重建命令、切流观测和
 Room/Identity 停机 5 分钟故障演练，因此 P3 暂不标记完成。
 
@@ -177,6 +179,7 @@ consumer group 的 lag 均归零；Commerce 单服务切到 `prefer` 后，在 I
 
 - `PROJECTION_MODE=shadow`：返回权威 API 结果，只读取投影做 match/mismatch 比对，不用权威响应反写投影。
 - `PROJECTION_MODE=prefer`：新鲜投影直接返回；缺失、损坏或陈旧时回源，回源失败按权限链路 fail closed。
+- `INTERACTION_PROJECTION_MODE`、`COMMERCE_PROJECTION_MODE`：覆盖全局模式，用于按服务灰度切流。
 - 重点观察 `live_projection_reads_total`、`live_projection_fallback_total`、`live_projection_comparisons_total`、`live_projection_age_seconds`、`live_projection_apply_total`、`live_projection_fail_closed_total` 和 `live_kafka_consumer_lag`。
 
 ### 切流顺序

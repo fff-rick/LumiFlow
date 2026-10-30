@@ -90,9 +90,6 @@ func (s *projectionStore) ApplyProjection(context.Context, string, redisstore.Pr
 	s.writes++
 	return true, nil
 }
-func (*projectionStore) RefreshProjection(context.Context, string, int64, time.Time, []byte) (bool, error) {
-	return true, nil
-}
 func (*projectionStore) LoadProjection(context.Context, string) (redisstore.ProjectionRecord, bool, error) {
 	return redisstore.ProjectionRecord{}, false, nil
 }
