@@ -20,13 +20,8 @@ type Client struct {
 	http          *http.Client
 }
 
-func New(base string) *Client {
-	return &Client{base: strings.TrimRight(base, "/"), http: &http.Client{Timeout: 800 * time.Millisecond}}
-}
 func NewInternal(base, token string) *Client {
-	client := New(base)
-	client.internalToken = token
-	return client
+	return &Client{base: strings.TrimRight(base, "/"), internalToken: token, http: &http.Client{Timeout: 800 * time.Millisecond}}
 }
 func (c *Client) call(ctx context.Context, method, path string, out any) (err error) {
 	r, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
@@ -71,7 +66,7 @@ func (c *Client) SyncFluxFeed(ctx context.Context, projection identityprojection
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("identity-room status=%d", res.StatusCode)
 	}

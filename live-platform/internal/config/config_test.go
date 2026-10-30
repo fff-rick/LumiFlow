@@ -107,12 +107,14 @@ func TestRoomOutboxWorkerRequiresKafkaCredentials(t *testing.T) {
 
 func TestProjectionModeDefaultsToShadowAndAcceptsPrefer(t *testing.T) {
 	t.Setenv("PROJECTION_MODE", "")
+	t.Setenv("INTERACTION_PROJECTION_MODE", "")
+	t.Setenv("COMMERCE_PROJECTION_MODE", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load default: %v", err)
 	}
-	if cfg.Projection.Mode != "shadow" {
-		t.Fatalf("mode=%q want shadow", cfg.Projection.Mode)
+	if cfg.Projection.InteractionMode != "shadow" || cfg.Projection.CommerceMode != "shadow" {
+		t.Fatalf("modes=%+v want shadow", cfg.Projection)
 	}
 
 	t.Setenv("PROJECTION_MODE", "prefer")
@@ -120,8 +122,21 @@ func TestProjectionModeDefaultsToShadowAndAcceptsPrefer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load prefer: %v", err)
 	}
-	if cfg.Projection.Mode != "prefer" {
-		t.Fatalf("mode=%q want prefer", cfg.Projection.Mode)
+	if cfg.Projection.InteractionMode != "prefer" || cfg.Projection.CommerceMode != "prefer" {
+		t.Fatalf("modes=%+v want prefer", cfg.Projection)
+	}
+}
+
+func TestProjectionModesCanRollOutIndependently(t *testing.T) {
+	t.Setenv("PROJECTION_MODE", "shadow")
+	t.Setenv("INTERACTION_PROJECTION_MODE", "prefer")
+	t.Setenv("COMMERCE_PROJECTION_MODE", "shadow")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Projection.InteractionMode != "prefer" || cfg.Projection.CommerceMode != "shadow" {
+		t.Fatalf("modes=%+v", cfg.Projection)
 	}
 }
 

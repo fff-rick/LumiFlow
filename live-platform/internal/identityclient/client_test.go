@@ -20,12 +20,15 @@ func TestGetRoomAccessUsesSingleRequest(t *testing.T) {
 		if r.URL.Path != "/internal/v1/rooms/12/access/34" {
 			t.Fatalf("path=%s", r.URL.Path)
 		}
+		if r.Header.Get("X-Internal-Token") != "service-secret" {
+			t.Fatalf("internal token=%q", r.Header.Get("X-Internal-Token"))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"room":{"room_id":12,"status":"LIVING"},"banned":false,"muted":true}`))
 	}))
 	defer server.Close()
 
-	access, err := New(server.URL).GetRoomAccess(context.Background(), 12, 34)
+	access, err := NewInternal(server.URL, "service-secret").GetRoomAccess(context.Background(), 12, 34)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +45,15 @@ func TestUserDecodesInternalStatus(t *testing.T) {
 		if r.URL.Path != "/internal/v1/users/42" {
 			t.Fatalf("path=%s", r.URL.Path)
 		}
+		if r.Header.Get("X-Internal-Token") != "service-secret" {
+			t.Fatalf("internal token=%q", r.Header.Get("X-Internal-Token"))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":42,"nickname":"viewer","avatar":"avatar.png","status":2}`))
 	}))
 	defer server.Close()
 
-	user, err := New(server.URL).User(context.Background(), 42)
+	user, err := NewInternal(server.URL, "service-secret").User(context.Background(), 42)
 	if err != nil {
 		t.Fatal(err)
 	}

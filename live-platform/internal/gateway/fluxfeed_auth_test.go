@@ -61,7 +61,7 @@ func TestFluxFeedBridgeOwnsLoginAndExchangesProtectedRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer login.Body.Close()
+	defer func() { _ = login.Body.Close() }()
 	if login.StatusCode != http.StatusOK {
 		t.Fatalf("login status=%d", login.StatusCode)
 	}
@@ -82,7 +82,7 @@ func TestFluxFeedBridgeOwnsLoginAndExchangesProtectedRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("protected request status=%d", response.StatusCode)
 	}

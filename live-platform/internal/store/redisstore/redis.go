@@ -61,22 +61,8 @@ redis.call('HSET', KEYS[1],
 return 1
 `)
 
-var refreshProjectionScript = redis.NewScript(`
-local current = redis.call('HGET', KEYS[1], 'version')
-if not current or tonumber(current) ~= tonumber(ARGV[1]) then
-  return 0
-end
-redis.call('HSET', KEYS[1], 'projected_at', ARGV[2], 'payload', ARGV[3])
-return 1
-`)
-
 func (s *Store) ApplyProjection(ctx context.Context, key string, record ProjectionRecord) (bool, error) {
 	result, err := applyProjectionScript.Run(ctx, s.client, []string{key}, record.Version, record.ProjectedAt.UnixMilli(), record.Topic, record.Partition, record.Offset, record.Payload).Int()
-	return result == 1, err
-}
-
-func (s *Store) RefreshProjection(ctx context.Context, key string, expectedVersion int64, projectedAt time.Time, payload []byte) (bool, error) {
-	result, err := refreshProjectionScript.Run(ctx, s.client, []string{key}, expectedVersion, projectedAt.UnixMilli(), payload).Int()
 	return result == 1, err
 }
 

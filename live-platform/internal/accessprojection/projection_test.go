@@ -25,16 +25,6 @@ func (s *memoryStore) ApplyProjection(_ context.Context, key string, value redis
 	s.values[key] = value
 	return true, nil
 }
-func (s *memoryStore) RefreshProjection(_ context.Context, key string, expectedVersion int64, projectedAt time.Time, payload []byte) (bool, error) {
-	current, ok := s.values[key]
-	if !ok || current.Version != expectedVersion {
-		return false, nil
-	}
-	current.ProjectedAt = projectedAt
-	current.Payload = append([]byte(nil), payload...)
-	s.values[key] = current
-	return true, nil
-}
 func (s *memoryStore) LoadProjection(_ context.Context, key string) (redisstore.ProjectionRecord, bool, error) {
 	value, ok := s.values[key]
 	return value, ok, nil
@@ -98,7 +88,7 @@ func TestReaderFailsClosedWhenProjectionIsStaleAndFallbackFails(t *testing.T) {
 	}
 }
 
-func TestReaderRefreshesStaleProjectionWithoutChangingVersion(t *testing.T) {
+func TestReaderDoesNotOverwriteVersionedProjectionFromUnversionedFallback(t *testing.T) {
 	store := &memoryStore{values: map[string]redisstore.ProjectionRecord{}}
 	old := time.Now().Add(-2 * time.Minute)
 	putProjection(t, store, roomKey(NamespaceInteraction, 7), old, projectionevent.RoomPayload{RoomID: 7, AnchorID: 4, Title: "old", Status: "LIVING", CreatedAt: old})
@@ -116,7 +106,7 @@ func TestReaderRefreshesStaleProjectionWithoutChangingVersion(t *testing.T) {
 	if err := json.Unmarshal(stored.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if stored.Version != 9 || payload.Title != "new" || !stored.ProjectedAt.After(old) {
+	if stored.Version != 9 || payload.Title != "old" || !stored.ProjectedAt.Equal(old) {
 		t.Fatalf("stored=%+v payload=%+v", stored, payload)
 	}
 }
@@ -165,9 +155,10 @@ func projectionRecord(t *testing.T, topic, eventType, aggregateID string, versio
 		t.Fatal(err)
 	}
 	aggregateType := "ROOM"
-	if eventType == projectionevent.IdentityUserUpserted {
+	switch eventType {
+	case projectionevent.IdentityUserUpserted:
 		aggregateType = "IDENTITY"
-	} else if eventType == projectionevent.GovernanceChanged {
+	case projectionevent.GovernanceChanged:
 		aggregateType = "ROOM_GOVERNANCE"
 	}
 	envelope, err := json.Marshal(mq.Envelope{EventID: "event", EventType: eventType, Version: 1, Producer: projectionevent.Producer, AggregateType: aggregateType, AggregateID: aggregateID, AggregateVersion: version, CreatedAt: time.Now().UTC(), Payload: raw})

@@ -201,7 +201,7 @@ func (b *fluxFeedBridge) call(ctx context.Context, rawURL, method string, body a
 	if err != nil {
 		return fmt.Errorf("identity provider unavailable: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 		return errFluxFeedUnauthorized
 	}
