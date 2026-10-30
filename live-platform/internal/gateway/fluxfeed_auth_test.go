@@ -89,7 +89,7 @@ func TestFluxFeedBridgeOwnsLoginAndExchangesProtectedRequests(t *testing.T) {
 }
 
 func TestFluxFeedVideoRoutesKeepAccessTokenAndRewritePath(t *testing.T) {
-	requests := make(chan string, 7)
+	requests := make(chan string, 15)
 	flux := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if authorization := r.Header.Get("Authorization"); authorization != "Bearer flux-token" {
 			t.Fatalf("authorization=%q", authorization)
@@ -119,7 +119,15 @@ func TestFluxFeedVideoRoutesKeepAccessTokenAndRewritePath(t *testing.T) {
 		{http.MethodPost, "/api/v1/videos", "POST /api/videos"},
 		{http.MethodGet, "/api/v1/videos/12", "GET /api/videos/12"},
 		{http.MethodDelete, "/api/v1/videos/12", "DELETE /api/videos/12"},
+			{http.MethodGet, "/api/v1/videos/12/comments?limit=50", "GET /api/videos/12/comments?limit=50"},
+			{http.MethodPost, "/api/v1/videos/12/comments", "POST /api/videos/12/comments"},
+			{http.MethodDelete, "/api/v1/comments/23", "DELETE /api/comments/23"},
 		{http.MethodGet, "/api/v1/users/me/videos", "GET /api/users/me/videos"},
+			{http.MethodGet, "/api/v1/users/me/following?limit=100", "GET /api/users/me/following?limit=100"},
+			{http.MethodGet, "/api/v1/users/me/followers?limit=50", "GET /api/users/me/followers?limit=50"},
+			{http.MethodPut, "/api/v1/users/me/following/9", "PUT /api/users/me/following/9"},
+			{http.MethodDelete, "/api/v1/users/me/following/9", "DELETE /api/users/me/following/9"},
+			{http.MethodGet, "/api/v1/users/9", "GET /api/users/9"},
 		{http.MethodGet, "/api/v1/users/9/videos", "GET /api/users/9/videos"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

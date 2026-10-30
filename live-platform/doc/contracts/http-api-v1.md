@@ -28,9 +28,13 @@
 | POST | `/content-assets` | 必需；`multipart/form-data` | FluxFeed 视频服务 |
 | POST | `/videos` | 必需；建议携带 `Idempotency-Key` | FluxFeed 视频服务 |
 | GET/DELETE | `/videos/{video_id}` | GET 公开；DELETE 必需 | FluxFeed 视频服务 |
-| GET | `/users/me/videos`、`/users/{user_id}/videos` | 前者必需；后者公开 | FluxFeed 视频服务 |
+| GET | `/users/{user_id}`、`/users/{user_id}/videos` | 公开 | FluxFeed 视频服务 |
+| GET | `/users/me/videos`、`/users/me/following`、`/users/me/followers` | 必需 | FluxFeed 视频服务 |
+| PUT/DELETE | `/users/me/following/{target_user_id}` | 必需 | FluxFeed 视频服务 |
 | GET | `/feed-items`、`/content-assets/{asset...}` | 公开 | FluxFeed 视频服务 |
 | PUT/DELETE | `/videos/{video_id}/like` | 必需；必须携带 `Idempotency-Key` | FluxFeed 视频服务 |
+| GET/POST | `/videos/{video_id}/comments` | GET 公开；POST 必需 | FluxFeed 视频服务 |
+| DELETE | `/comments/{comment_id}` | 必需 | FluxFeed 视频服务 |
 
 ## 迁移要求
 
