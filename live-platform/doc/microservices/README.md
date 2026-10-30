@@ -1,14 +1,14 @@
 # LUMI LIVE 微服务细化拆分方案
 
-**状态：P2 已完成，进入 P3**
+**状态：P3 进行中（事件投影、影子比对与切流指标已落地，待重建和故障演练）**
 **基线：2026-10-14 当前代码**  
 **适用范围：直播互动平面，不包含视频采集、转码与 CDN**
 
 ## 结论
 
-当前项目已经完成进程拆分和 MySQL schema/账号隔离，但仍存在三个会阻止完整故障隔离和独立扩缩容的问题：
+当前项目已经完成进程拆分、MySQL schema/账号隔离和 P3 首个事件投影切片，但仍存在三个会阻止完整故障隔离和独立扩缩容的问题：
 
-1. Commerce 和 Interaction 仍同步调用 `live-identity-room`，控制面故障会影响交易与高频互动。
+1. Commerce 和 Interaction 已具备 `shadow`/`prefer` 切流及差异指标，但全量快照重建和切流验收尚未完成。
 2. Identity 与 Room 仍合并在一个进程，Presence 与 Interaction 也尚未拆开。
 3. Redis Key 仍使用历史共享 namespace；Query 的安全定义视图也需要由 Kafka 实体投影替换。
 
@@ -45,8 +45,8 @@
 | --- | --- | --- |
 | `cmd/api` | `live-gateway` | ✅ 只保留 Web UI、健康检查、指标和固定上游代理，不再连接业务数据源 |
 | `cmd/identityroom` | `live-identity` + `live-room` | ⚠️ 已使用两个 schema/账号和独立 Repository，但仍绑定在同一进程 |
-| `cmd/interaction` | `live-presence` + `live-interaction` | ⚠️ 高频写已拆出，但在线与弹幕点赞负载仍混在同一进程 |
-| `cmd/commerce` | `live-commerce` | ✅ 交易使用独立 schema，房间/治理通过内部 HTTP 校验 |
+| `cmd/interaction` | `live-presence` + `live-interaction` | ⚠️ 房间/治理/身份支持影子比对和投影优先切流，但在线与弹幕点赞负载仍混在同一进程 |
+| `cmd/commerce` | `live-commerce` | ✅ 交易使用独立 schema，房间/治理支持影子比对和投影优先切流，缺失或陈旧时内部 HTTP 兜底 |
 | `cmd/worker` | 服务所有者的独立 Worker Deployment | ⚠️ 角色开关和 K8s 清单存在，Compose 仍合并运行 |
 | `cmd/query` | `live-query` | ⚠️ 已使用独立只读账号；安全定义视图在 P3 替换为 Kafka 实体投影 |
 | FluxFeed 视频域 | FluxFeed API / Worker | ✅ 网关仅按白名单路由转发，LUMI 不保留视频 schema 或视频服务 |
@@ -56,8 +56,8 @@
 - Gateway 固定路由：[`../../internal/gateway/server.go`](../../internal/gateway/server.go)
 - Gateway 最小依赖装配：[`../../cmd/api/main.go`](../../cmd/api/main.go)
 - Query 依赖装配：[`../../cmd/query/main.go`](../../cmd/query/main.go)
-- Commerce 内部 Room 调用：[`../../cmd/commerce/main.go`](../../cmd/commerce/main.go)
-- Interaction 内部身份房间 HTTP 调用：[`../../internal/identityclient/client.go`](../../internal/identityclient/client.go)
+- Commerce 投影影子/优先模式与 Room 兜底：[`../../cmd/commerce/main.go`](../../cmd/commerce/main.go)
+- Interaction 投影影子/优先模式与身份房间兜底：[`../../cmd/interaction/main.go`](../../cmd/interaction/main.go)
 - Worker 角色装配：[`../../cmd/worker/main.go`](../../cmd/worker/main.go)
 
 ## 拆分原则

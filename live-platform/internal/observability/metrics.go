@@ -36,6 +36,12 @@ type Metrics struct {
 	KafkaConsume           *prometheus.CounterVec
 	KafkaConsumerLag       *prometheus.GaugeVec
 	KafkaBufferedRecords   *prometheus.GaugeVec
+	ProjectionReads        *prometheus.CounterVec
+	ProjectionFallbacks    *prometheus.CounterVec
+	ProjectionComparisons  *prometheus.CounterVec
+	ProjectionAge          *prometheus.HistogramVec
+	ProjectionApplies      *prometheus.CounterVec
+	ProjectionFailClosed   *prometheus.CounterVec
 }
 
 func NewMetrics(service string) *Metrics {
@@ -66,8 +72,14 @@ func NewMetrics(service string) *Metrics {
 		KafkaConsume:           prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "kafka_consume_total", Help: "Kafka consumed records by group, topic and result."}, []string{"group", "topic", "result"}),
 		KafkaConsumerLag:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "kafka_consumer_lag", Help: "Approximate consumer lag from the fetch high watermark after commit."}, []string{"group", "topic", "partition"}),
 		KafkaBufferedRecords:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "kafka_buffered_records", Help: "Records currently buffered in a franz-go client."}, []string{"client", "direction"}),
+		ProjectionReads:        prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "projection_reads_total", Help: "Projection reads by namespace, mode, entity and result."}, []string{"namespace", "mode", "entity", "result"}),
+		ProjectionFallbacks:    prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "projection_fallback_total", Help: "Projection authority fallbacks by namespace, mode, entity and result."}, []string{"namespace", "mode", "entity", "result"}),
+		ProjectionComparisons:  prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "projection_comparisons_total", Help: "Shadow comparisons by namespace, entity and result."}, []string{"namespace", "entity", "result"}),
+		ProjectionAge:          prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "projection_age_seconds", Help: "Age of projection records when read.", Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600}}, []string{"namespace", "entity"}),
+		ProjectionApplies:      prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "projection_apply_total", Help: "Projection apply attempts by namespace, entity and result."}, []string{"namespace", "entity", "result"}),
+		ProjectionFailClosed:   prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "projection_fail_closed_total", Help: "Requests denied because neither a usable projection nor authority response was available."}, []string{"namespace", "mode", "entity"}),
 	}
-	reg.MustRegister(m.HTTPRequests, m.HTTPDuration, m.Danmaku, m.DanmakuDegradation, m.DanmakuFanoutEstimate, m.DanmakuSampleRate, m.Likes, m.GiftOrders, m.GiftRateLimited, m.RealtimePublish, m.StatsBroadcast, m.OutboxPending, m.OutboxOldestPendingAge, m.OutboxPublish, m.OutboxRetries, m.KafkaProduce, m.KafkaProduceErrors, m.KafkaProduceDur, m.KafkaConsume, m.KafkaConsumerLag, m.KafkaBufferedRecords)
+	reg.MustRegister(m.HTTPRequests, m.HTTPDuration, m.Danmaku, m.DanmakuDegradation, m.DanmakuFanoutEstimate, m.DanmakuSampleRate, m.Likes, m.GiftOrders, m.GiftRateLimited, m.RealtimePublish, m.StatsBroadcast, m.OutboxPending, m.OutboxOldestPendingAge, m.OutboxPublish, m.OutboxRetries, m.KafkaProduce, m.KafkaProduceErrors, m.KafkaProduceDur, m.KafkaConsume, m.KafkaConsumerLag, m.KafkaBufferedRecords, m.ProjectionReads, m.ProjectionFallbacks, m.ProjectionComparisons, m.ProjectionAge, m.ProjectionApplies, m.ProjectionFailClosed)
 	// Pre-initialize low-cardinality counters so dashboards do not show "no data" before first traffic.
 	for _, result := range []string{"success", "failed", "rejected", "replay"} {
 		m.Danmaku.WithLabelValues(result).Add(0)
@@ -144,6 +156,29 @@ func (m *Metrics) KafkaLag(group, topic string, partition int32, lag int64) {
 }
 func (m *Metrics) KafkaBuffered(client, direction string, records int64) {
 	m.KafkaBufferedRecords.WithLabelValues(client, direction).Set(float64(records))
+}
+
+func (m *Metrics) ProjectionRead(namespace, mode, entity, result string, age time.Duration) {
+	m.ProjectionReads.WithLabelValues(namespace, mode, entity, result).Inc()
+	if age >= 0 {
+		m.ProjectionAge.WithLabelValues(namespace, entity).Observe(age.Seconds())
+	}
+}
+
+func (m *Metrics) ProjectionFallback(namespace, mode, entity, result string) {
+	m.ProjectionFallbacks.WithLabelValues(namespace, mode, entity, result).Inc()
+}
+
+func (m *Metrics) ProjectionCompared(namespace, entity, result string) {
+	m.ProjectionComparisons.WithLabelValues(namespace, entity, result).Inc()
+}
+
+func (m *Metrics) ProjectionApplied(namespace, entity, result string) {
+	m.ProjectionApplies.WithLabelValues(namespace, entity, result).Inc()
+}
+
+func (m *Metrics) ProjectionFailedClosed(namespace, mode, entity string) {
+	m.ProjectionFailClosed.WithLabelValues(namespace, mode, entity).Inc()
 }
 
 func (m *Metrics) RealtimePublished(result string, duration time.Duration) {

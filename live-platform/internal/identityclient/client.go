@@ -5,12 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/example/live-platform/internal/auth"
-	"github.com/example/live-platform/internal/identityprojection"
-	"github.com/example/live-platform/internal/room"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/example/live-platform/internal/auth"
+	"github.com/example/live-platform/internal/identityprojection"
+	"github.com/example/live-platform/internal/room"
 )
 
 type Client struct {
@@ -100,9 +101,17 @@ func (c *Client) Join(ctx context.Context, r, u int64) (room.Room, error) {
 	return v, e
 }
 func (c *Client) User(ctx context.Context, id int64) (auth.User, error) {
-	var v auth.User
+	var v struct {
+		ID        int64     `json:"id"`
+		Account   string    `json:"account"`
+		Username  string    `json:"username"`
+		Nickname  string    `json:"nickname"`
+		Avatar    string    `json:"avatar"`
+		Status    int       `json:"status"`
+		CreatedAt time.Time `json:"created_at"`
+	}
 	e := c.call(ctx, "GET", fmt.Sprintf("/internal/v1/users/%d", id), &v)
-	return v, e
+	return auth.User{ID: v.ID, Account: v.Account, Username: v.Username, Nickname: v.Nickname, Avatar: v.Avatar, Status: v.Status, CreatedAt: v.CreatedAt}, e
 }
 func (c *Client) Create(context.Context, int64, string) (room.Room, error) {
 	return room.Room{}, fmt.Errorf("unsupported")

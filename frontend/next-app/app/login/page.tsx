@@ -52,7 +52,7 @@ export default function LoginPage() {
         setMessage(result.message)
       } else {
         await refreshSession()
-        router.replace("/")
+        router.replace("/discover")
         router.refresh()
       }
       setPending(false)
@@ -91,7 +91,7 @@ export default function LoginPage() {
         return
       }
       await refreshSession()
-      router.replace("/")
+      router.replace("/discover")
       router.refresh()
     } finally {
       setPending(false)

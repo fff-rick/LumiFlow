@@ -41,6 +41,72 @@ func Open(cfg Config) (*Store, error) {
 func (s *Store) Ping(ctx context.Context) error { return s.client.Ping(ctx).Err() }
 func (s *Store) Close() error                   { return s.client.Close() }
 
+type ProjectionRecord struct {
+	Version     int64
+	ProjectedAt time.Time
+	Topic       string
+	Partition   int32
+	Offset      int64
+	Payload     []byte
+}
+
+var applyProjectionScript = redis.NewScript(`
+local current = redis.call('HGET', KEYS[1], 'version')
+if current and tonumber(current) >= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call('HSET', KEYS[1],
+  'version', ARGV[1], 'projected_at', ARGV[2], 'topic', ARGV[3],
+  'partition', ARGV[4], 'offset', ARGV[5], 'payload', ARGV[6])
+return 1
+`)
+
+var refreshProjectionScript = redis.NewScript(`
+local current = redis.call('HGET', KEYS[1], 'version')
+if not current or tonumber(current) ~= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call('HSET', KEYS[1], 'projected_at', ARGV[2], 'payload', ARGV[3])
+return 1
+`)
+
+func (s *Store) ApplyProjection(ctx context.Context, key string, record ProjectionRecord) (bool, error) {
+	result, err := applyProjectionScript.Run(ctx, s.client, []string{key}, record.Version, record.ProjectedAt.UnixMilli(), record.Topic, record.Partition, record.Offset, record.Payload).Int()
+	return result == 1, err
+}
+
+func (s *Store) RefreshProjection(ctx context.Context, key string, expectedVersion int64, projectedAt time.Time, payload []byte) (bool, error) {
+	result, err := refreshProjectionScript.Run(ctx, s.client, []string{key}, expectedVersion, projectedAt.UnixMilli(), payload).Int()
+	return result == 1, err
+}
+
+func (s *Store) LoadProjection(ctx context.Context, key string) (ProjectionRecord, bool, error) {
+	values, err := s.client.HGetAll(ctx, key).Result()
+	if err != nil || len(values) == 0 {
+		return ProjectionRecord{}, false, err
+	}
+	version, err := strconv.ParseInt(values["version"], 10, 64)
+	if err != nil {
+		return ProjectionRecord{}, false, err
+	}
+	projectedAt, err := strconv.ParseInt(values["projected_at"], 10, 64)
+	if err != nil {
+		return ProjectionRecord{}, false, err
+	}
+	partition, err := strconv.ParseInt(values["partition"], 10, 32)
+	if err != nil {
+		return ProjectionRecord{}, false, err
+	}
+	offset, err := strconv.ParseInt(values["offset"], 10, 64)
+	if err != nil {
+		return ProjectionRecord{}, false, err
+	}
+	return ProjectionRecord{
+		Version: version, ProjectedAt: time.UnixMilli(projectedAt).UTC(), Topic: values["topic"],
+		Partition: int32(partition), Offset: offset, Payload: []byte(values["payload"]),
+	}, true, nil
+}
+
 type FixedWindowLimiter struct{ client *redis.Client }
 
 func NewFixedWindowLimiter(store *Store) *FixedWindowLimiter {

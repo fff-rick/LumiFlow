@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/example/live-platform/internal/projectionevent"
 )
 
 type DB interface {
@@ -19,14 +21,31 @@ type DB interface {
 type Repository struct {
 	db               DB
 	integrationTopic string
+	roomTopic        string
+	governanceTopic  string
 }
 
-func NewRepository(db DB, integrationTopic string) *Repository {
-	return &Repository{db: db, integrationTopic: strings.TrimSpace(integrationTopic)}
+func NewRepository(db DB, topics ...string) *Repository {
+	r := &Repository{db: db}
+	if len(topics) > 0 {
+		r.integrationTopic = strings.TrimSpace(topics[0])
+	}
+	if len(topics) > 1 {
+		r.roomTopic = strings.TrimSpace(topics[1])
+	}
+	if len(topics) > 2 {
+		r.governanceTopic = strings.TrimSpace(topics[2])
+	}
+	return r
 }
 
 func (r *Repository) Create(ctx context.Context, anchorID int64, title string) (Room, error) {
-	res, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Room{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
 INSERT INTO live_rooms(anchor_id, title, status, created_at, updated_at)
 VALUES (?, ?, 'PREPARING', NOW(3), NOW(3))`, anchorID, title)
 	if err != nil {
@@ -36,13 +55,31 @@ VALUES (?, ?, 'PREPARING', NOW(3), NOW(3))`, anchorID, title)
 	if err != nil {
 		return Room{}, err
 	}
-	return r.ByID(ctx, id)
+	v, err := roomByID(ctx, tx, id)
+	if err != nil {
+		return Room{}, err
+	}
+	if err := r.enqueueRoom(ctx, tx, v); err != nil {
+		return Room{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Room{}, err
+	}
+	return v, nil
 }
 
 func (r *Repository) ByID(ctx context.Context, id int64) (Room, error) {
+	return roomByID(ctx, r.db, id)
+}
+
+type roomQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func roomByID(ctx context.Context, db roomQueryer, id int64) (Room, error) {
 	var v Room
 	var started, ended sql.NullTime
-	err := r.db.QueryRowContext(ctx, `
+	err := db.QueryRowContext(ctx, `
 SELECT id, anchor_id, title, status, started_at, ended_at, created_at
 FROM live_rooms
 WHERE id = ? LIMIT 1`, id).
@@ -158,6 +195,9 @@ INSERT INTO outbox_events(event_id, aggregate_type, aggregate_id, event_type, to
 VALUES (?, 'ROOM', ?, ?, ?, ?, ?, 0, 0, NOW(3), NOW(3))`, eventID, strconv.FormatInt(value.ID, 10), eventType, r.integrationTopic, strconv.FormatInt(value.ID, 10), payload); err != nil {
 		return err
 	}
+	if err := r.enqueueRoom(ctx, tx, value); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -177,16 +217,20 @@ SELECT EXISTS(SELECT 1 FROM room_bans WHERE room_id=? AND user_id=?)`, roomID, u
 }
 
 func (r *Repository) Ban(ctx context.Context, roomID, userID, createdBy int64, reason string) error {
-	_, err := r.db.ExecContext(ctx, `
+	return r.changeGovernance(ctx, roomID, userID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 INSERT INTO room_bans(room_id, user_id, created_by, reason, created_at)
 VALUES (?, ?, ?, ?, NOW(3))
 ON DUPLICATE KEY UPDATE created_by=VALUES(created_by), reason=VALUES(reason), created_at=NOW(3)`, roomID, userID, createdBy, reason)
-	return err
+		return err
+	})
 }
 
 func (r *Repository) Unban(ctx context.Context, roomID, userID int64) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM room_bans WHERE room_id=? AND user_id=?`, roomID, userID)
-	return err
+	return r.changeGovernance(ctx, roomID, userID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM room_bans WHERE room_id=? AND user_id=?`, roomID, userID)
+		return err
+	})
 }
 
 func (r *Repository) ListBans(ctx context.Context, roomID int64) ([]Ban, error) {
@@ -220,17 +264,21 @@ SELECT EXISTS(
 }
 
 func (r *Repository) Mute(ctx context.Context, roomID, userID, createdBy int64, until *time.Time, reason string) error {
-	_, err := r.db.ExecContext(ctx, `
+	return r.changeGovernance(ctx, roomID, userID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 INSERT INTO room_mutes(room_id, user_id, muted_until, created_by, reason, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, NOW(3), NOW(3))
 ON DUPLICATE KEY UPDATE muted_until=VALUES(muted_until), created_by=VALUES(created_by), reason=VALUES(reason), updated_at=NOW(3)`,
-		roomID, userID, until, createdBy, reason)
-	return err
+			roomID, userID, until, createdBy, reason)
+		return err
+	})
 }
 
 func (r *Repository) Unmute(ctx context.Context, roomID, userID int64) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM room_mutes WHERE room_id=? AND user_id=?`, roomID, userID)
-	return err
+	return r.changeGovernance(ctx, roomID, userID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM room_mutes WHERE room_id=? AND user_id=?`, roomID, userID)
+		return err
+	})
 }
 
 func (r *Repository) ListMutes(ctx context.Context, roomID int64) ([]Mute, error) {
@@ -252,4 +300,46 @@ ORDER BY updated_at DESC`, roomID)
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (r *Repository) enqueueRoom(ctx context.Context, tx *sql.Tx, value Room) error {
+	if r.roomTopic == "" {
+		return nil
+	}
+	return projectionevent.Enqueue(ctx, tx, r.roomTopic, "ROOM", projectionevent.RoomAggregateID(value.ID), projectionevent.RoomUpserted, strconv.FormatInt(value.ID, 10), projectionevent.RoomPayload{
+		RoomID: value.ID, AnchorID: value.AnchorID, Title: value.Title, Status: string(value.Status),
+		StartedAt: value.StartedAt, EndedAt: value.EndedAt, CreatedAt: value.CreatedAt,
+	})
+}
+
+func (r *Repository) changeGovernance(ctx context.Context, roomID, userID int64, change func(*sql.Tx) error) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := change(tx); err != nil {
+		return err
+	}
+	if r.governanceTopic != "" {
+		var banned, muted int
+		var mutedUntil sql.NullTime
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM room_bans WHERE room_id=? AND user_id=?),
+       EXISTS(SELECT 1 FROM room_mutes WHERE room_id=? AND user_id=? AND (muted_until IS NULL OR muted_until>NOW(3))),
+       (SELECT muted_until FROM room_mutes WHERE room_id=? AND user_id=? LIMIT 1)`,
+			roomID, userID, roomID, userID, roomID, userID).Scan(&banned, &muted, &mutedUntil); err != nil {
+			return err
+		}
+		var until *time.Time
+		if mutedUntil.Valid {
+			until = &mutedUntil.Time
+		}
+		if err := projectionevent.Enqueue(ctx, tx, r.governanceTopic, "ROOM_GOVERNANCE", projectionevent.GovernanceAggregateID(roomID, userID), projectionevent.GovernanceChanged, strconv.FormatInt(roomID, 10), projectionevent.GovernancePayload{
+			RoomID: roomID, UserID: userID, Banned: banned == 1, Muted: muted == 1, MutedUntil: until,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

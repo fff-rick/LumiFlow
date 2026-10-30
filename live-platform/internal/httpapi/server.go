@@ -190,7 +190,15 @@ func NewIdentityRoom(d Deps) http.Handler {
 			writeError(w, 404, "USER_NOT_FOUND", "user not found")
 			return
 		}
-		writeJSON(w, http.StatusOK, u)
+		writeJSON(w, http.StatusOK, struct {
+			ID        int64     `json:"id"`
+			Account   string    `json:"account"`
+			Username  string    `json:"username"`
+			Nickname  string    `json:"nickname"`
+			Avatar    string    `json:"avatar"`
+			Status    int       `json:"status"`
+			CreatedAt time.Time `json:"created_at"`
+		}{u.ID, u.Account, u.Username, u.Nickname, u.Avatar, u.Status, u.CreatedAt})
 	})
 	s.mux.HandleFunc("POST /internal/v1/rooms/{room_id}/join/{user_id}", func(w http.ResponseWriter, r *http.Request) {
 		roomID, ok := pathInt64(w, r, "room_id")

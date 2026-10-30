@@ -6,6 +6,11 @@
 {
   "event_id": "01J...",
   "event_type": "gift.sent",
+  "version": 1,
+  "producer": "live-identity-room",
+  "aggregate_type": "ROOM",
+  "aggregate_id": "10001",
+  "aggregate_version": 42,
   "room_id": 10001,
   "created_at": "2026-08-24T12:00:00.000Z",
   "trace": { "traceparent": "00-..." },
@@ -13,7 +18,7 @@
 }
 ```
 
-必填字段为 `event_id`、`event_type`、`room_id`、`created_at`、`payload`。`trace` 可选，只用于上下文传播。消息 key 是 Kafka 分区键，未编码在 envelope 中。
+所有事件必填 `event_id`、`event_type`、`created_at` 和 `payload`。房间互动事件额外要求 `room_id`；投影事件额外要求 `version`、`producer`、`aggregate_type`、`aggregate_id` 和单调递增的 `aggregate_version`。`trace` 可选，只用于上下文传播。消息 key 是 Kafka 分区键，未编码在 envelope 中。
 
 ## 已发布事件
 
@@ -21,6 +26,9 @@
 | --- | --- | --- | --- | --- |
 | `live.danmaku.v1` | `danmaku.sent` | API / 后续互动接入服务 | 弹幕归档 | `room_id` | 弹幕接受后最佳努力归档；实时广播不依赖此消费。 |
 | `live.gift.v1` | `gift.sent` | 钱包-礼物事务 Outbox | 礼物投递 | `room_id` | 已提交礼物订单的异步实时投递。 |
+| `live.identity.v1` | `identity.user.upserted` | Identity 事务 Outbox | Interaction、Commerce 投影 | `user_id` | 用户展示信息和启用状态。 |
+| `live.room.v1` | `room.upserted` | Room 事务 Outbox | Interaction、Commerce 投影 | `room_id` | 房间状态和基础准入信息。 |
+| `live.governance.v1` | `room.governance.changed` | Room 事务 Outbox | Interaction、Commerce 投影 | `room_id` | 指定房间用户的完整禁言、封禁状态。 |
 
 `gift.sent` payload：
 
@@ -46,6 +54,7 @@
 - 消费者的临时处理失败将重试，成功处理后才提交 offset。
 - `gift.sent` 由事务 Outbox 发布。Kafka 不可用时，已提交的礼物订单仍正确存在，等待 Publisher 重试。
 - 当前 `danmaku.sent` 为直接异步生产，Kafka 不可用时允许归档缺失但不得影响实时弹幕成功。迁移到需要可靠归档的业务要求时，必须先改为事务 Outbox。
+- 投影消费者按 Redis namespace 隔离写入权，保存 `aggregate_version`、`projected_at`、源 topic/partition/offset；重复或乱序事件不会覆盖较新状态。
 
 ## 演进方式
 

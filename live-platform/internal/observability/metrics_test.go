@@ -17,6 +17,20 @@ func TestOutboxPendingMetrics(t *testing.T) {
 	}
 }
 
+func TestProjectionMetrics(t *testing.T) {
+	m := NewMetrics("test")
+	m.ProjectionRead("interaction", "shadow", "room", "hit", 2*time.Second)
+	m.ProjectionCompared("interaction", "room", "mismatch")
+	m.ProjectionApplied("interaction", "room", "out_of_order")
+	m.ProjectionFailedClosed("interaction", "prefer", "room")
+
+	for _, name := range []string{"live_projection_reads_total", "live_projection_comparisons_total", "live_projection_apply_total", "live_projection_fail_closed_total", "live_projection_age_seconds"} {
+		if !metricExists(t, m, name) {
+			t.Fatalf("metric %q not found", name)
+		}
+	}
+}
+
 func gaugeValue(t *testing.T, m *Metrics, name string) float64 {
 	t.Helper()
 	families, err := m.registry.Gather()
@@ -30,4 +44,18 @@ func gaugeValue(t *testing.T, m *Metrics, name string) float64 {
 	}
 	t.Fatalf("gauge %q not found", name)
 	return 0
+}
+
+func metricExists(t *testing.T, m *Metrics, name string) bool {
+	t.Helper()
+	families, err := m.registry.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() == name {
+			return true
+		}
+	}
+	return false
 }

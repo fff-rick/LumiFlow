@@ -100,9 +100,9 @@ api_json() {
 }
 
 register_user() {
-  local username="$1" nickname="$2"
+	local account="$1@metrics.local" nickname="$2"
   api_json POST "$BASE_URL/api/v1/auth/register" "" \
-    "$(jq -nc --arg username "$username" --arg nickname "$nickname" '{username:$username,nickname:$nickname,password:"password123"}')"
+		"$(jq -nc --arg account "$account" --arg nickname "$nickname" '{account:$account,nickname:$nickname,password:"password123"}')"
 }
 
 metric_value() {
@@ -298,6 +298,13 @@ metric_at_least process_metrics 'count(process_cpu_seconds_total{job=~"live-.*|c
 metric_at_least mysql_dashboard_metrics 'count(mysql_global_status_threads_connected) + count(mysql_global_status_questions)' 2 || METRIC_FAILED=1
 metric_at_least redis_dashboard_metrics 'count(redis_memory_used_bytes) + count(redis_commands_processed_total)' 2 || METRIC_FAILED=1
 metric_at_least kafka_lag_metric 'count(kafka_consumergroup_lag)' 1 || METRIC_FAILED=1
+metric_at_least projection_reads 'sum(live_projection_reads_total) or vector(0)' 1 || METRIC_FAILED=1
+metric_at_least projection_comparisons 'sum(live_projection_comparisons_total) or vector(0)' 1 || METRIC_FAILED=1
+metric_at_least projection_applies 'sum(live_projection_apply_total{result="applied"}) or vector(0)' 1 || METRIC_FAILED=1
+metric_at_least projection_age_samples 'sum(live_projection_age_seconds_count) or vector(0)' 1 || METRIC_FAILED=1
+metric_at_most projection_mismatches 'sum(live_projection_comparisons_total{result="mismatch"}) or vector(0)' 0 || METRIC_FAILED=1
+metric_at_most projection_errors 'sum(live_projection_reads_total{result="error"}) + sum(live_projection_fallback_total{result="error"}) + sum(live_projection_apply_total{result="error"}) or vector(0)' 0 || METRIC_FAILED=1
+metric_at_most projection_fail_closed 'sum(live_projection_fail_closed_total) or vector(0)' 0 || METRIC_FAILED=1
 metric_at_most outbox_pending 'max(live_outbox_pending) or vector(0)' 0 || METRIC_FAILED=1
 metric_at_most kafka_consumer_lag 'max(kafka_consumergroup_lag) or vector(0)' 10 || METRIC_FAILED=1
 

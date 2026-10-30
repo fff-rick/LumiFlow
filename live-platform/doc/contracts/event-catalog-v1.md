@@ -6,10 +6,14 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `live.danmaku.v1` | `danmaku.sent` | Interaction；`internal/danmaku.KafkaProducer` | Danmaku archive / `live-danmaku-persist-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.danmaku.v1.dlq`，30 天 |
 | `live.gift.v1` | `gift.sent` | Commerce；`internal/gift.Repository` 事务 Outbox | Realtime gift / `live-gift-realtime-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.gift.v1.dlq`，30 天 |
+| `live.identity.v1` | `identity.user.upserted` | Identity；用户写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1` | `user_id` 十进制字符串 | Broker 默认值 | `live.identity.v1.dlq` |
+| `live.room.v1` | `room.upserted` | Room；房间写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.room.v1.dlq` |
+| `live.governance.v1` | `room.governance.changed` | Room；禁言/封禁写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.governance.v1.dlq` |
 
 ## 所有权和兼容规则
 
 - `danmaku.sent` 的业务生产点只能在 Interaction；`gift.sent` 只能在 Commerce 的送礼本地事务中生成。
+- Identity、Room 和 Governance 事件必须与权威状态在同一事务写入 Outbox；`aggregate_version` 使用源 schema 的 Outbox id，消费者只接受更大版本。
 - 消费者必须以 `event_id` 幂等；同一房间的顺序仅由 `room_id` partition key 保证。
 - 源 Topic 只有在演练环境明确创建时才能声称上表保留期；Kubernetes 环境若仍使用 Broker 默认值，发布前必须由平台配置对齐。
 - DLQ 值使用 `internal/mq.DeadLetter`，保留源 topic、partition、offset、key、value、consumer group、错误和失败时间。

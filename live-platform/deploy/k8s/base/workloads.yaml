@@ -547,3 +547,89 @@ spec:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 1000m, memory: 512Mi}
           readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-identity-outbox}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-identity-outbox}}
+  template:
+    metadata: {labels: {app: live-worker-identity-outbox, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-identity-outbox
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: identity-outbox}
+            - name: IDENTITY_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: IDENTITY_MYSQL_DSN}}
+            - {name: MYSQL_MAX_OPEN_CONNS, value: '10'}
+            - {name: MYSQL_MAX_IDLE_CONNS, value: '5'}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-interaction-projection}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-interaction-projection}}
+  template:
+    metadata: {labels: {app: live-worker-interaction-projection, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-interaction-projection
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: interaction-projection}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-commerce-projection}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-commerce-projection}}
+  template:
+    metadata: {labels: {app: live-worker-commerce-projection, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-commerce-projection
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: commerce-projection}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}

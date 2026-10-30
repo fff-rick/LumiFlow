@@ -97,7 +97,7 @@ export default function LiveLobby() {
             <Sparkles size={32} />
             <h2>暂时没有正在直播的房间</h2>
             <p>有主播开播后会自动出现在这里。</p>
-            <Link className="portal-secondary" href="/">
+            <Link className="portal-secondary" href="/discover">
               去看看视频
             </Link>
           </section>

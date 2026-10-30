@@ -292,7 +292,7 @@ void main() {
   float k = smoothstep(r + w, r - w, d) * clamp(r / (w * 2.0), 0.0, 1.0);
   vec4 sharp = photo(p, 0.0, 0.0);
   vec3 real = mix(uPaper, sharp.rgb, sharp.a);
-  outColor = vec4(mix(print, real, k), 1.0);
+  outColor = vec4(mix(real, mix(print, real, k), 0.2), 1.0);
 }`;
 
 const MODES = { mono: 0, duotone: 1, color: 2 };
@@ -302,9 +302,9 @@ const BURST_SECONDS = 1.3;
 const INTRO_SECONDS = 1.4;
 const MASK_SCALE = 0.5;
 const RAIN_DROP_COUNT = 8;
-const RAIN_SECONDS = 2;
+const RAIN_SECONDS = 0.1;
 const RAIN_EXPAND_SECONDS = 0.35;
-const RAIN_DISSOLVE_SECONDS = 1.15;
+const RAIN_DISSOLVE_SECONDS = 1;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -399,6 +399,7 @@ const HalftoneReveal = ({
   clickBurst = true,
   intro = true,
   rainReveal = false,
+  onRevealComplete,
   className = '',
   style = undefined
 }) => {
@@ -427,7 +428,8 @@ const HalftoneReveal = ({
     wander,
     clickBurst,
     intro,
-    rainReveal
+    rainReveal,
+    onRevealComplete
   };
   const settingsRef = useRef(settings);
 
@@ -711,9 +713,10 @@ const HalftoneReveal = ({
           const progress = Math.min(1, (elapsed - RAIN_SECONDS) / RAIN_DISSOLVE_SECONDS);
           state.rainDissolve = progress * progress * (3 - 2 * progress);
         }
-        if (state.rainDissolve >= 1) {
+        if (state.rainDissolve >= 1 && !state.revealAll) {
           state.revealAll = true;
           bursts.length = 0;
+          s.onRevealComplete?.();
         }
       }
 
@@ -798,7 +801,10 @@ const HalftoneReveal = ({
       }
       state.image = image;
       state.introStart = performance.now();
-      if (reduce && settingsRef.current.rainReveal) state.revealAll = true;
+      if (reduce && settingsRef.current.rainReveal) {
+        state.revealAll = true;
+        settingsRef.current.onRevealComplete?.();
+      }
       wake();
     };
     image.src = src;

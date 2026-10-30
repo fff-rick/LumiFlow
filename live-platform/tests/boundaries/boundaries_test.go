@@ -84,7 +84,7 @@ func TestARCH002ServiceDatabaseConnectionBaseline(t *testing.T) {
 		"cmd/query/main.go":        {"cfg.Databases.QueryDSN"},
 		"cmd/commerce/main.go":     {"cfg.Databases.CommerceDSN"},
 		"cmd/identityroom/main.go": {"cfg.Databases.IdentityDSN", "cfg.Databases.RoomDSN"},
-		"cmd/worker/main.go":       {"cfg.Databases.CommerceDSN", "cfg.Databases.ArchiveDSN", "cfg.Databases.QueryWriterDSN"},
+		"cmd/worker/main.go":       {"cfg.Databases.IdentityDSN", "cfg.Databases.CommerceDSN", "cfg.Databases.RoomDSN", "cfg.Databases.ArchiveDSN", "cfg.Databases.QueryWriterDSN"},
 	}
 	for file, want := range expectedOpenCalls {
 		source := readFile(t, root, file)
@@ -138,6 +138,7 @@ func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 		"eventdedup":      set("processed_events"),
 		"like":            set("room_like_snapshots"),
 		"outbox":          set("outbox_events"),
+		"projectionevent": set("outbox_events"),
 		"httpapi":         set("room_message_feed"),
 		"querymodel":      set("user_display_projection"),
 		"videoprojection": set("fluxfeed_video_projection"),
@@ -190,10 +191,11 @@ func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 func TestARCH006RedisKeyOwnershipBaseline(t *testing.T) {
 	root := repositoryRoot(t)
 	allowed := map[string][]string{
-		"danmaku":    {"live:limit:danmaku:user:"},
-		"gift":       {"live:limit:gift:user:"},
-		"like":       {"live:room:{"},
-		"redisstore": {"live:room:", "live:stats:rooms:"},
+		"accessprojection": {"live:"},
+		"danmaku":          {"live:limit:danmaku:user:"},
+		"gift":             {"live:limit:gift:user:"},
+		"like":             {"live:room:{"},
+		"redisstore":       {"live:room:", "live:stats:rooms:"},
 	}
 	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {

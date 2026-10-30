@@ -94,7 +94,7 @@ export default function CreatorProfile({ userId }: { userId: string }) {
             <UserPlus size={34} />
             <h1>{message || "正在载入创作者主页…"}</h1>
             {message && (
-              <Link className="portal-primary" href="/">
+              <Link className="portal-primary" href="/discover">
                 返回发现
               </Link>
             )}

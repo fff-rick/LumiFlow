@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/example/live-platform/internal/accessprojection"
 	"github.com/example/live-platform/internal/auth"
 	"github.com/example/live-platform/internal/commerceapi"
 	"github.com/example/live-platform/internal/config"
@@ -63,7 +64,8 @@ func main() {
 	}()
 
 	rooms := identityclient.New(cfg.IdentityRoom.BaseURL)
-	gifts := gift.NewService(gift.NewRepository(mysql), rooms, redisstore.NewFixedWindowLimiter(redis), gift.Config{MaxCountPerRequest: cfg.Gift.MaxCountPerRequest, UserRateLimit: cfg.Gift.UserRateLimit, UserRateWindow: cfg.Gift.UserRateWindow}, cfg.Kafka.GiftTopic)
+	access := accessprojection.NewReader(accessprojection.NamespaceCommerce, redis, rooms, cfg.Projection.Mode, cfg.Projection.MaxStaleness, metrics)
+	gifts := gift.NewService(gift.NewRepository(mysql), access, redisstore.NewFixedWindowLimiter(redis), gift.Config{MaxCountPerRequest: cfg.Gift.MaxCountPerRequest, UserRateLimit: cfg.Gift.UserRateLimit, UserRateWindow: cfg.Gift.UserRateWindow}, cfg.Kafka.GiftTopic)
 	api := commerceapi.New(commerceapi.Deps{Log: log, Tokens: auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL), Gifts: gifts, Wallet: wallet.NewService(wallet.NewRepository(mysql), cfg.Wallet.DevCreditEnabled), Viewers: viewer.NewService(redis, cfg.Engagement.ViewerTTL), Metrics: metrics, MySQL: mysql, Redis: redis})
 	srv := &http.Server{Addr: cfg.Commerce.HTTPAddr, Handler: api.Handler(), ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
