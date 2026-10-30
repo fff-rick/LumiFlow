@@ -86,7 +86,7 @@ export default function PublishVideo() {
               <Link className="portal-primary" href="/me">
                 查看我的作品
               </Link>
-              <Link className="portal-secondary" href="/">
+              <Link className="portal-secondary" href="/discover">
                 返回发现
               </Link>
             </div>

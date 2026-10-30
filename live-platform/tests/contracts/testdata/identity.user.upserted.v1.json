@@ -1,0 +1,16 @@
+{
+  "event_id": "01K8F4P3IDENTITY0000000001",
+  "event_type": "identity.user.upserted",
+  "version": 1,
+  "producer": "live-identity-room",
+  "aggregate_type": "IDENTITY",
+  "aggregate_id": "7",
+  "aggregate_version": 11,
+  "created_at": "2026-10-25T10:00:00Z",
+  "payload": {
+    "user_id": 7,
+    "nickname": "Viewer",
+    "avatar": "/avatar.png",
+    "status": 1
+  }
+}

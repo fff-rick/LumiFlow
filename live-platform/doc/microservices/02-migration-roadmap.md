@@ -146,6 +146,20 @@
 
 ## 阶段 P3：房间、治理和身份事件投影
 
+**实施状态：进行中（2026-10-25）**
+
+已落地 Identity、Room、Governance 事务 Outbox，两个独立 consumer group 分别维护
+Interaction 与 Commerce 的 Redis 投影。`PROJECTION_MODE=shadow` 默认保持权威 API
+响应并旁路比对投影，显式切为 `prefer` 后才采用投影优先、缺失或超过 5 分钟时
+内部 HTTP 兜底并 fail closed。读命中/陈旧、回源、影子差异、投影年龄、乱序丢弃、
+Kafka lag 和 fail-closed 均已有指标。尚未完成权威数据全量快照重建命令、切流观测和
+Room/Identity 停机 5 分钟故障演练，因此 P3 暂不标记完成。
+
+2026-10-25 本地切流验证已完成一轮：shadow 压测未出现 mismatch/error，两个投影
+consumer group 的 lag 均归零；Commerce 单服务切到 `prefer` 后，在 IdentityRoom
+停止期间仍完成礼物交易。该结果只证明本地短时金丝雀，不替代生产影子观察窗口、
+5 分钟故障演练和全量重建验收。
+
 ### 目标
 
 消除 Interaction/Commerce/Presence 高频链路对 Identity/Room 同步查询的依赖。
@@ -158,6 +172,12 @@
 4. 投影记录 `aggregate_version`、`projected_at`、源 offset 和最大允许陈旧时间。
 5. 缓存未命中时允许一次有 deadline 的 Room/Identity API 兜底；调用失败对权限操作默认拒绝。
 6. 增加投影重建命令：从权威 API 分页快照 + Kafka 保留窗口增量追平。
+
+### 切流配置与指标
+
+- `PROJECTION_MODE=shadow`：返回权威 API 结果，只读取投影做 match/mismatch 比对，不用权威响应反写投影。
+- `PROJECTION_MODE=prefer`：新鲜投影直接返回；缺失、损坏或陈旧时回源，回源失败按权限链路 fail closed。
+- 重点观察 `live_projection_reads_total`、`live_projection_fallback_total`、`live_projection_comparisons_total`、`live_projection_age_seconds`、`live_projection_apply_total`、`live_projection_fail_closed_total` 和 `live_kafka_consumer_lag`。
 
 ### 切流顺序
 

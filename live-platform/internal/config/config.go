@@ -29,6 +29,7 @@ type Config struct {
 	Observability ObservabilityConfig
 	Traffic       TrafficConfig
 	Worker        WorkerConfig
+	Projection    ProjectionConfig
 }
 
 type HTTPConfig struct{ Addr string }
@@ -114,10 +115,15 @@ type KafkaConfig struct {
 	IdentityTopic                 string
 	VideoIntegrationTopic         string
 	RoomIntegrationTopic          string
+	IdentityDomainTopic           string
+	RoomDomainTopic               string
+	GovernanceTopic               string
 	DanmakuConsumerGroup          string
 	GiftConsumerGroup             string
 	IdentityConsumerGroup         string
 	VideoIntegrationConsumerGroup string
+	InteractionProjectionGroup    string
+	CommerceProjectionGroup       string
 	ConsumerLease                 time.Duration
 	TLSEnabled                    bool
 	SASLMechanism                 string
@@ -127,6 +133,10 @@ type KafkaConfig struct {
 
 type WorkerConfig struct {
 	Roles []string
+}
+type ProjectionConfig struct {
+	Mode         string
+	MaxStaleness time.Duration
 }
 type TrafficConfig struct {
 	HotViewers         int64
@@ -307,13 +317,21 @@ func Load() (Config, error) {
 	if err != nil || giftUserRateWindow <= 0 {
 		return Config{}, fmt.Errorf("GIFT_USER_RATE_WINDOW must be a positive duration")
 	}
+	projectionMaxStaleness, err := time.ParseDuration(env("PROJECTION_MAX_STALENESS", "5m"))
+	if err != nil || projectionMaxStaleness <= 0 {
+		return Config{}, fmt.Errorf("PROJECTION_MAX_STALENESS must be a positive duration")
+	}
+	projectionMode := strings.ToLower(strings.TrimSpace(env("PROJECTION_MODE", "shadow")))
+	if projectionMode != "shadow" && projectionMode != "prefer" {
+		return Config{}, fmt.Errorf("PROJECTION_MODE must be one of: shadow, prefer")
+	}
 
-	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection"))
+	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,identity-outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection,interaction-projection,commerce-projection"))
 	if len(workerRoles) == 0 {
 		return Config{}, fmt.Errorf("WORKER_ROLES must contain at least one role")
 	}
 	allowedWorkerRoles := map[string]struct{}{
-		"stats": {}, "like-snapshot": {}, "outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {},
+		"stats": {}, "like-snapshot": {}, "outbox": {}, "identity-outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {}, "interaction-projection": {}, "commerce-projection": {},
 	}
 	seenWorkerRoles := make(map[string]struct{}, len(workerRoles))
 	for i, role := range workerRoles {
@@ -346,7 +364,7 @@ func Load() (Config, error) {
 	if rawRoles := strings.TrimSpace(os.Getenv("WORKER_ROLES")); rawRoles != "" {
 		needsKafkaCredentials = false
 		for _, role := range workerRoles {
-			if role == "outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" {
+			if role == "outbox" || role == "identity-outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" || role == "interaction-projection" || role == "commerce-projection" {
 				needsKafkaCredentials = true
 				break
 			}
@@ -476,10 +494,15 @@ func Load() (Config, error) {
 			IdentityTopic:                 env("KAFKA_IDENTITY_TOPIC", "integration.identity.v1"),
 			VideoIntegrationTopic:         env("KAFKA_VIDEO_INTEGRATION_TOPIC", "integration.video.v1"),
 			RoomIntegrationTopic:          env("KAFKA_ROOM_INTEGRATION_TOPIC", "integration.room.v1"),
+			IdentityDomainTopic:           env("KAFKA_IDENTITY_DOMAIN_TOPIC", "live.identity.v1"),
+			RoomDomainTopic:               env("KAFKA_ROOM_DOMAIN_TOPIC", "live.room.v1"),
+			GovernanceTopic:               env("KAFKA_GOVERNANCE_TOPIC", "live.governance.v1"),
 			DanmakuConsumerGroup:          env("KAFKA_DANMAKU_CONSUMER_GROUP", "live-danmaku-persist-v1"),
 			GiftConsumerGroup:             env("KAFKA_GIFT_CONSUMER_GROUP", "live-gift-realtime-v1"),
 			IdentityConsumerGroup:         env("KAFKA_IDENTITY_CONSUMER_GROUP", "lumi-identity-projection-v1"),
 			VideoIntegrationConsumerGroup: env("KAFKA_VIDEO_INTEGRATION_CONSUMER_GROUP", "lumi-video-projection-v1"),
+			InteractionProjectionGroup:    env("KAFKA_INTERACTION_PROJECTION_GROUP", "live-interaction-access-v1"),
+			CommerceProjectionGroup:       env("KAFKA_COMMERCE_PROJECTION_GROUP", "live-commerce-access-v1"),
 			ConsumerLease:                 consumerLease,
 			TLSEnabled:                    kafkaTLSEnabled,
 			SASLMechanism:                 kafkaSASLMechanism,
@@ -489,6 +512,7 @@ func Load() (Config, error) {
 		Outbox:        OutboxConfig{PollInterval: outboxPoll, BatchSize: outboxBatch, Lease: outboxLease, ProduceTimeout: outboxProduceTimeout},
 		Traffic:       TrafficConfig{HotViewers: hotViewers, ProtectViewers: protectViewers, HotDanmakuRate: hotRate, ProtectDanmakuRate: protectRate, HotSampleRate: hotSample, ProtectSampleRate: protectSample, RateWindow: rateWindow, AdaptiveEnabled: adaptiveEnabled, TargetFanoutRate: targetFanout, HotFanoutRate: hotFanout, ProtectFanoutRate: protectFanout, MinSampleRate: minSampleRate},
 		Worker:        WorkerConfig{Roles: workerRoles},
+		Projection:    ProjectionConfig{Mode: projectionMode, MaxStaleness: projectionMaxStaleness},
 		Observability: observability,
 	}, nil
 }

@@ -17,7 +17,7 @@ import { assetURL } from "@/lib/platform"
 import "./AppNav.css"
 
 const links = [
-  { href: "/", label: "发现", icon: Compass },
+  { href: "/discover", label: "发现", icon: Compass },
   { href: "/live", label: "直播", icon: Radio },
   { href: "/publish", label: "发布", icon: Upload },
   { href: "/me", label: "作品", icon: UserRound },
@@ -84,7 +84,6 @@ export default function AppNav() {
 }
 
 function isActive(pathname: string, href: string) {
-  if (href === "/") return pathname === "/"
   if (href === "/live")
     return pathname === "/live" || pathname.startsWith("/rooms/")
   return pathname === href || pathname.startsWith(`${href}/`)

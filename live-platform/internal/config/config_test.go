@@ -48,7 +48,7 @@ func TestWorkerRoleDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := []string{"stats", "like-snapshot", "outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection"}
+	want := []string{"stats", "like-snapshot", "outbox", "identity-outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection", "interaction-projection", "commerce-projection"}
 	if len(cfg.Worker.Roles) != len(want) {
 		t.Fatalf("unexpected worker role count: %v", cfg.Worker.Roles)
 	}
@@ -102,6 +102,33 @@ func TestRoomOutboxWorkerRequiresKafkaCredentials(t *testing.T) {
 	t.Setenv("KAFKA_SASL_PASSWORD", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected room outbox worker to require Kafka credentials")
+	}
+}
+
+func TestProjectionModeDefaultsToShadowAndAcceptsPrefer(t *testing.T) {
+	t.Setenv("PROJECTION_MODE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load default: %v", err)
+	}
+	if cfg.Projection.Mode != "shadow" {
+		t.Fatalf("mode=%q want shadow", cfg.Projection.Mode)
+	}
+
+	t.Setenv("PROJECTION_MODE", "prefer")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load prefer: %v", err)
+	}
+	if cfg.Projection.Mode != "prefer" {
+		t.Fatalf("mode=%q want prefer", cfg.Projection.Mode)
+	}
+}
+
+func TestProjectionModeRejectsUnknownValue(t *testing.T) {
+	t.Setenv("PROJECTION_MODE", "both")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected projection mode validation error")
 	}
 }
 

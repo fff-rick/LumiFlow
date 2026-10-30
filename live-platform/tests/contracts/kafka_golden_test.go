@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/live-platform/internal/accessprojection"
 	"github.com/example/live-platform/internal/danmaku"
 	"github.com/example/live-platform/internal/gift"
 	"github.com/example/live-platform/internal/mq"
+	"github.com/example/live-platform/internal/store/redisstore"
 )
 
 type sqlResult int64
@@ -79,5 +81,42 @@ func TestGiftSentV1GoldenIsAcceptedByCurrentConsumer(t *testing.T) {
 	}
 	if dedup.done != 1 || publisher.calls != 1 {
 		t.Fatalf("dedup done=%d publish=%d want 1/1", dedup.done, publisher.calls)
+	}
+}
+
+type projectionStore struct{ writes int }
+
+func (s *projectionStore) ApplyProjection(context.Context, string, redisstore.ProjectionRecord) (bool, error) {
+	s.writes++
+	return true, nil
+}
+func (*projectionStore) RefreshProjection(context.Context, string, int64, time.Time, []byte) (bool, error) {
+	return true, nil
+}
+func (*projectionStore) LoadProjection(context.Context, string) (redisstore.ProjectionRecord, bool, error) {
+	return redisstore.ProjectionRecord{}, false, nil
+}
+
+func TestAccessProjectionV1GoldensAreAcceptedByCurrentConsumer(t *testing.T) {
+	topics := accessprojection.Topics{Identity: "live.identity.v1", Room: "live.room.v1", Governance: "live.governance.v1"}
+	for _, test := range []struct{ file, topic string }{
+		{"identity.user.upserted.v1.json", topics.Identity},
+		{"room.upserted.v1.json", topics.Room},
+		{"room.governance.changed.v1.json", topics.Governance},
+	} {
+		t.Run(test.file, func(t *testing.T) {
+			raw, err := os.ReadFile("testdata/" + test.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &projectionStore{}
+			handler := accessprojection.NewHandler(accessprojection.NamespaceInteraction, store, topics, nil)
+			if err := handler.Handle(context.Background(), mq.Record{Topic: test.topic, Partition: 0, Offset: 1, Value: raw}); err != nil {
+				t.Fatal(err)
+			}
+			if store.writes != 1 {
+				t.Fatalf("writes=%d want 1", store.writes)
+			}
+		})
 	}
 }

@@ -19,12 +19,17 @@ const (
 )
 
 type Envelope struct {
-	EventID   string            `json:"event_id"`
-	EventType string            `json:"event_type"`
-	RoomID    int64             `json:"room_id,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	Trace     map[string]string `json:"trace,omitempty"`
-	Payload   json.RawMessage   `json:"payload"`
+	EventID          string            `json:"event_id"`
+	EventType        string            `json:"event_type"`
+	Version          int               `json:"version,omitempty"`
+	Producer         string            `json:"producer,omitempty"`
+	AggregateType    string            `json:"aggregate_type,omitempty"`
+	AggregateID      string            `json:"aggregate_id,omitempty"`
+	AggregateVersion int64             `json:"aggregate_version,omitempty"`
+	RoomID           int64             `json:"room_id,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	Trace            map[string]string `json:"trace,omitempty"`
+	Payload          json.RawMessage   `json:"payload"`
 }
 
 // ValidateRoomEnvelope validates fields shared by the room-scoped event

@@ -44,6 +44,8 @@ x-app-env: &app-env
   LIKE_USER_RATE_WINDOW: "${LIKE_USER_RATE_WINDOW:-1s}"
   LIKE_ROOM_CACHE_TTL: "${LIKE_ROOM_CACHE_TTL:-2s}"
   LIKE_BAN_CACHE_TTL: "${LIKE_BAN_CACHE_TTL:-1s}"
+  PROJECTION_MODE: "${PROJECTION_MODE:-shadow}"
+  PROJECTION_MAX_STALENESS: "${PROJECTION_MAX_STALENESS:-5m}"
   VIEWER_TTL: "90s"
   STATS_INTERVAL: "200ms"
   ACTIVE_ROOM_WINDOW: "3m"
@@ -57,10 +59,15 @@ x-app-env: &app-env
   KAFKA_IDENTITY_TOPIC: "integration.identity.v1"
   KAFKA_VIDEO_INTEGRATION_TOPIC: "integration.video.v1"
   KAFKA_ROOM_INTEGRATION_TOPIC: "integration.room.v1"
+  KAFKA_IDENTITY_DOMAIN_TOPIC: "live.identity.v1"
+  KAFKA_ROOM_DOMAIN_TOPIC: "live.room.v1"
+  KAFKA_GOVERNANCE_TOPIC: "live.governance.v1"
   KAFKA_DANMAKU_CONSUMER_GROUP: "live-danmaku-persist-v1"
   KAFKA_GIFT_CONSUMER_GROUP: "live-gift-realtime-v1"
   KAFKA_IDENTITY_CONSUMER_GROUP: "lumi-identity-projection-v1"
   KAFKA_VIDEO_INTEGRATION_CONSUMER_GROUP: "lumi-video-projection-v1"
+  KAFKA_INTERACTION_PROJECTION_GROUP: "live-interaction-access-v1"
+  KAFKA_COMMERCE_PROJECTION_GROUP: "live-commerce-access-v1"
   KAFKA_CONSUMER_LEASE: "30s"
   OUTBOX_POLL_INTERVAL: "100ms"
   OUTBOX_BATCH_SIZE: "100"
@@ -174,6 +181,12 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.gift.v1.dlq --partitions 6 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic integration.room.v1 --partitions 6 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic integration.room.v1.dlq --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.identity.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.room.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.governance.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.identity.v1.dlq --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.room.v1.dlq --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic live.governance.v1.dlq --partitions 6 --replication-factor 1
         /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.danmaku.v1 --add-config retention.ms=604800000
         /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.gift.v1 --add-config retention.ms=604800000
         /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:19092 --alter --entity-type topics --entity-name live.danmaku.v1.dlq --add-config retention.ms=2592000000
@@ -274,7 +287,7 @@ services:
     build: .
     command: ["live-api"]
     environment: *gateway-env
-    ports: ["8080:8080"]
+    ports: ["${API_HOST_PORT:-8080}:8080"]
     depends_on:
       live-commerce: {condition: service_started}
       live-interaction: {condition: service_started}
@@ -334,6 +347,7 @@ services:
     environment:
       <<: *app-env
       COMMERCE_MYSQL_DSN: "live_commerce_app:commerce-app@tcp(mysql:3306)/commerce?parseTime=true&charset=utf8mb4"
+      IDENTITY_MYSQL_DSN: "live_identity_app:identity-app@tcp(mysql:3306)/identity?parseTime=true&charset=utf8mb4"
       ROOM_MYSQL_DSN: "live_room_app:room-app@tcp(mysql:3306)/room?parseTime=true&charset=utf8mb4"
       ARCHIVE_MYSQL_DSN: "live_archive_app:archive-app@tcp(mysql:3306)/archive?parseTime=true&charset=utf8mb4"
       QUERY_WRITER_MYSQL_DSN: "live_query_app:query-app@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"

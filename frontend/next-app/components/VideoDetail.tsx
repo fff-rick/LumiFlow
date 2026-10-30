@@ -188,7 +188,7 @@ export default function VideoDetail({ videoId }: { videoId: string }) {
             <MessageCircle size={34} />
             <h1>暂时无法打开视频</h1>
             <p>{message || "视频可能仍在审核或已下架。"}</p>
-            <Link className="portal-primary" href="/">
+            <Link className="portal-primary" href="/discover">
               返回发现
             </Link>
           </section>
