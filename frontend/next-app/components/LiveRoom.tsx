@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { FormEvent, useEffect, useState } from "react"
+import { Centrifuge } from "centrifuge"
 import AppNav from "@/components/AppNav"
 import { useSession } from "@/components/SessionProvider"
 
@@ -18,10 +19,18 @@ type Message = {
   message_id: string
   nickname?: string
   content?: string
-  type: string
+  type?: string
   gift_name?: string
   count?: number
 }
+type Subscription = { channel: string; token: string }
+type JoinResponse = {
+  stats?: Stats
+  heartbeat_interval_seconds?: number
+  subscriptions: Subscription[]
+  personal_channel: string
+}
+type RealtimeState = "offline" | "connecting" | "online"
 
 export default function LiveRoom({ roomId }: { roomId: string }) {
   const router = useRouter()
@@ -31,6 +40,10 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [joined, setJoined] = useState(false)
   const [heartbeatSeconds, setHeartbeatSeconds] = useState(20)
+  const [realtimeSession, setRealtimeSession] = useState<JoinResponse | null>(
+    null
+  )
+  const [realtimeState, setRealtimeState] = useState<RealtimeState>("offline")
   const [notice, setNotice] = useState("")
 
   useEffect(() => {
@@ -82,20 +95,107 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     }
   }, [heartbeatSeconds, joined, roomId])
 
+  useEffect(() => {
+    if (!realtimeSession) return
+    const session = realtimeSession
+    let active = true
+    let client: Centrifuge | null = null
+
+    async function connect() {
+      const token = await realtimeToken()
+      if (!active) return
+      client = new Centrifuge(realtimeURL(), {
+        token,
+        getToken: () => realtimeToken(),
+      })
+      client.on("connected", () => {
+        if (!active) return
+        setRealtimeState("online")
+        setNotice("已进入直播间；实时广播已连接。")
+      })
+      client.on("connecting", () => active && setRealtimeState("connecting"))
+      client.on("disconnected", () => active && setRealtimeState("offline"))
+      client.on("error", (context) => console.warn("centrifuge", context))
+
+      const handlePublication = (value: unknown) => {
+        if (!active) return
+        const event = parseRealtimeEvent(value)
+        if (!event) return
+        if (event.type === "stats") {
+          const patch = parseStats(event.data)
+          if (patch)
+            setStats((current) => ({
+              viewer_count: patch.viewer_count ?? current.viewer_count,
+              like_count: patch.like_count ?? current.like_count,
+            }))
+          return
+        }
+        if (event.type === "danmaku" || event.type === "gift") {
+          const message = parseRealtimeMessage(event.type, event.data)
+          if (message)
+            setMessages((current) => appendUniqueMessage(current, message))
+          return
+        }
+        if (event.type === "room_muted") {
+          setNotice(eventReason(event.data, "你已被禁言。"))
+        }
+        if (event.type === "room_banned") {
+          setNotice(eventReason(event.data, "你已被移出直播间。"))
+          setJoined(false)
+          setRealtimeSession(null)
+        }
+      }
+
+      for (const subscription of session.subscriptions) {
+        const channel = subscription.channel
+        const roomSubscription = client.newSubscription(channel, {
+          token: subscription.token,
+          getToken: () => subscriptionToken(roomId, channel),
+        })
+        roomSubscription.on("publication", (context) =>
+          handlePublication(context.data)
+        )
+        roomSubscription.on("error", (context) =>
+          console.warn("centrifuge subscription", channel, context)
+        )
+        roomSubscription.subscribe()
+      }
+      const personal = client.newSubscription(session.personal_channel)
+      personal.on("publication", (context) => handlePublication(context.data))
+      personal.subscribe()
+      client.connect()
+    }
+
+    void connect().catch((error) => {
+      if (!active) return
+      setRealtimeState("offline")
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "实时广播连接失败，请稍后重试。"
+      )
+    })
+    return () => {
+      active = false
+      client?.disconnect()
+    }
+  }, [realtimeSession, roomId])
+
   async function join() {
     if (!user) {
       router.push("/login")
       return
     }
-    const result = await post<{
-      stats?: Stats
-      heartbeat_interval_seconds?: number
-    }>(`/api/platform/v1/rooms/${roomId}/join`)
+    const result = await post<JoinResponse>(
+      `/api/platform/v1/rooms/${roomId}/join`
+    )
     if (!result.ok) return setNotice(result.message)
     setJoined(true)
     if (result.data.stats) setStats(result.data.stats)
     setHeartbeatSeconds(result.data.heartbeat_interval_seconds ?? 20)
-    setNotice("已进入直播间；互动心跳已开启。")
+    setRealtimeState("connecting")
+    setRealtimeSession(result.data)
+    setNotice("已进入直播间；正在连接实时广播。")
   }
 
   async function sendDanmaku(event: FormEvent<HTMLFormElement>) {
@@ -109,7 +209,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
       { content }
     )
     if (!result.ok) return setNotice(result.message)
-    setMessages((value) => [...value.slice(-29), result.data])
+    setMessages((value) => appendUniqueMessage(value, result.data))
     event.currentTarget.reset()
   }
 
@@ -194,7 +294,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <strong>直播互动</strong>
               <span className="text-xs text-zinc-400">
-                {joined ? "HTTP 心跳已连接" : "进入后开启互动"}
+                {realtimeLabel(joined, realtimeState)}
               </span>
             </div>
             <div className="flex-1 space-y-3 overflow-y-auto p-5">
@@ -287,4 +387,89 @@ function metric(value: number) {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(Number(value) || 0)
+}
+
+async function realtimeToken() {
+  const result = await post<{ token?: string }>(
+    "/api/platform/v1/realtime/token"
+  )
+  if (!result.ok || !result.data.token)
+    throw new Error(result.ok ? "实时令牌无效" : result.message)
+  return result.data.token
+}
+
+async function subscriptionToken(roomId: string, channel: string) {
+  const result = await post<JoinResponse>(
+    `/api/platform/v1/rooms/${roomId}/join`
+  )
+  if (!result.ok) throw new Error(result.message)
+  const token = result.data.subscriptions.find(
+    (subscription) => subscription.channel === channel
+  )?.token
+  if (!token) throw new Error("实时订阅令牌无效")
+  return token
+}
+
+function realtimeURL() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+  const local = ["localhost", "127.0.0.1"].includes(window.location.hostname)
+  const host = local ? `${window.location.hostname}:8000` : window.location.host
+  return `${protocol}//${host}/connection/websocket`
+}
+
+function realtimeLabel(joined: boolean, state: RealtimeState) {
+  if (!joined) return "进入后开启互动"
+  if (state === "online") return "● WebSocket 实时"
+  if (state === "connecting") return "○ WebSocket 连接中"
+  return "○ WebSocket 已断开"
+}
+
+function appendUniqueMessage(messages: Message[], message: Message) {
+  if (messages.some((item) => item.message_id === message.message_id))
+    return messages
+  return [...messages.slice(-29), message]
+}
+
+function parseRealtimeEvent(value: unknown) {
+  if (!isRecord(value) || typeof value.type !== "string") return null
+  return { type: value.type, data: value.data }
+}
+
+function parseStats(value: unknown): Partial<Stats> | null {
+  if (!isRecord(value)) return null
+  const viewerCount = finiteNumber(value.viewer_count)
+  const likeCount = finiteNumber(value.like_count)
+  if (viewerCount === undefined && likeCount === undefined) return null
+  return { viewer_count: viewerCount, like_count: likeCount }
+}
+
+function parseRealtimeMessage(type: "danmaku" | "gift", value: unknown) {
+  if (!isRecord(value) || typeof value.message_id !== "string") return null
+  if (type === "danmaku" && typeof value.content !== "string") return null
+  if (type === "gift" && typeof value.gift_name !== "string") return null
+  return {
+    message_id: value.message_id,
+    type,
+    nickname:
+      typeof value.nickname === "string"
+        ? value.nickname
+        : `用户 #${finiteNumber(value.user_id) ?? "?"}`,
+    content: typeof value.content === "string" ? value.content : undefined,
+    gift_name:
+      typeof value.gift_name === "string" ? value.gift_name : undefined,
+    count: finiteNumber(value.count),
+  } satisfies Message
+}
+
+function eventReason(value: unknown, fallback: string) {
+  if (!isRecord(value) || typeof value.reason !== "string") return fallback
+  return `${fallback.slice(0, -1)}：${value.reason}`
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }
