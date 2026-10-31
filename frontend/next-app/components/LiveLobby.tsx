@@ -1,9 +1,11 @@
 "use client"
 
 import Link from "next/link"
-import { Radio, RefreshCw, Sparkles, Users } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { Radio, RefreshCw, Sparkles, Users, Video } from "lucide-react"
+import { FormEvent, useCallback, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import AppNav from "@/components/AppNav"
+import { useSession } from "@/components/SessionProvider"
 import { metric, platformRequest } from "@/lib/platform"
 import "./Portal.css"
 
@@ -18,9 +20,13 @@ type Room = {
 }
 
 export default function LiveLobby() {
+  const router = useRouter()
+  const { user, loading: sessionLoading } = useSession()
   const [rooms, setRooms] = useState<Room[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState("")
+  const [title, setTitle] = useState("")
+  const [creating, setCreating] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -37,6 +43,24 @@ export default function LiveLobby() {
     void Promise.resolve().then(load)
   }, [load])
 
+  async function createRoom(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const roomTitle = title.trim()
+    if (!roomTitle || creating) return
+    setCreating(true)
+    setMessage("")
+    try {
+      const room = await platformRequest<Room>("/rooms", {
+        method: "POST",
+        body: JSON.stringify({ title: roomTitle }),
+      })
+      router.push(`/rooms/${room.room_id}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "直播间创建失败")
+      setCreating(false)
+    }
+  }
+
   return (
     <main className="portal-page">
       <AppNav />
@@ -51,6 +75,39 @@ export default function LiveLobby() {
             <i /> {rooms.length} 个直播间
           </div>
         </header>
+
+        <section className="live-start-card">
+          <div>
+            <Video size={24} />
+            <span>
+              <strong>开启你的直播</strong>
+              <small>创建直播间后，继续生成 OBS 推流凭证。</small>
+            </span>
+          </div>
+          {!sessionLoading &&
+            (user ? (
+              <form onSubmit={createRoom}>
+                <label className="sr-only" htmlFor="live-room-title">
+                  直播标题
+                </label>
+                <input
+                  id="live-room-title"
+                  maxLength={100}
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="输入直播标题"
+                  required
+                  value={title}
+                />
+                <button className="portal-primary" disabled={creating}>
+                  {creating ? "正在创建…" : "创建并进入直播间"}
+                </button>
+              </form>
+            ) : (
+              <Link className="portal-primary" href="/login">
+                登录后开启直播
+              </Link>
+            ))}
+        </section>
 
         {message && (
           <div className="portal-message error live-lobby-error">

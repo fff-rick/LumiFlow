@@ -6,6 +6,7 @@ import { FormEvent, useEffect, useState } from "react"
 import { Centrifuge } from "centrifuge"
 import AppNav from "@/components/AppNav"
 import { useSession } from "@/components/SessionProvider"
+import WHEPPlayer from "@/components/WHEPPlayer"
 
 type Room = {
   room_id: number
@@ -31,6 +32,15 @@ type JoinResponse = {
   personal_channel: string
 }
 type RealtimeState = "offline" | "connecting" | "online"
+type MediaPlayback = {
+  provider?: string
+  status?: string
+  whep_url?: string
+}
+type MediaCredentials = MediaPlayback & {
+  server_url: string
+  stream_key: string
+}
 
 export default function LiveRoom({ roomId }: { roomId: string }) {
   const router = useRouter()
@@ -44,6 +54,8 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     null
   )
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("offline")
+  const [playback, setPlayback] = useState<MediaPlayback>({})
+  const [credentials, setCredentials] = useState<MediaCredentials | null>(null)
   const [notice, setNotice] = useState("")
 
   useEffect(() => {
@@ -68,6 +80,22 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
       .catch(() => active && setNotice("直播间暂不可用，请稍后重试。"))
     return () => {
       active = false
+    }
+  }, [roomId])
+
+  useEffect(() => {
+    let active = true
+    async function refresh() {
+      const next = await get<MediaPlayback>(
+        `/api/platform/v1/rooms/${roomId}/playback`
+      )
+      if (active && next) setPlayback(next)
+    }
+    void refresh()
+    const timer = window.setInterval(refresh, 3000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
     }
   }, [roomId])
 
@@ -227,6 +255,23 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
       }))
   }
 
+  async function issueMediaSession() {
+    const result = await post<MediaCredentials>(
+      `/api/platform/v1/rooms/${roomId}/media-session`
+    )
+    if (!result.ok) return setNotice(result.message)
+    setCredentials(result.data)
+    setPlayback(result.data)
+    setNotice("OBS 推流凭证已生成；开始推流后媒体状态会自动更新。")
+  }
+
+  async function startLive() {
+    const result = await post<Room>(`/api/platform/v1/rooms/${roomId}/start`)
+    if (!result.ok) return setNotice(result.message)
+    setRoom(result.data)
+    setNotice("直播已开始。")
+  }
+
   if (!room)
     return (
       <main className="grid min-h-svh place-items-center bg-zinc-950 p-6 text-zinc-300">
@@ -273,18 +318,30 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="relative aspect-video overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,.45),transparent_32%),linear-gradient(135deg,#15152b,#09090b)]">
             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.03)_1px,transparent_1px)] bg-[size:30px_30px]" />
-            <div className="relative grid h-full place-items-center p-8 text-center">
-              <div>
-                <span className="rounded-full bg-red-500 px-3 py-1 text-xs font-bold">
-                  {living ? "LIVE" : room.status}
-                </span>
-                <h2 className="mt-5 text-xl font-bold">媒体流接入位</h2>
-                <p className="mt-3 max-w-md text-sm leading-6 text-zinc-300">
-                  直播互动已经接入；接入 SRS、LiveKit
-                  或云直播后会在这里播放媒体流。
-                </p>
+            {playback.status === "PUBLISHING" && playback.whep_url && (
+              <WHEPPlayer url={playback.whep_url} />
+            )}
+            {!(playback.status === "PUBLISHING" && playback.whep_url) && (
+              <div className="relative grid h-full place-items-center p-8 text-center">
+                <div>
+                  <span className="rounded-full bg-red-500 px-3 py-1 text-xs font-bold">
+                    {living ? "LIVE" : room.status}
+                  </span>
+                  <h2 className="mt-5 text-xl font-bold">
+                    {playback.status === "PUBLISHING"
+                      ? "推流已就绪，等待开播"
+                      : playback.status === "DISCONNECTED"
+                        ? "主播暂时断开推流"
+                        : "等待主播推流"}
+                  </h2>
+                  <p className="mt-3 max-w-md text-sm leading-6 text-zinc-300">
+                    {playback.status
+                      ? `SRS 媒体状态：${playback.status}`
+                      : "该直播间尚未配置媒体会话。"}
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
             <div className="absolute bottom-0 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300">
               <span>◉ {metric(stats.viewer_count)} 在线</span>
               <span>♥ {metric(stats.like_count)} 点赞</span>
@@ -338,6 +395,53 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
             </form>
           </aside>
         </div>
+        {user?.id === room.anchor_id && (
+          <section className="mt-5 rounded-3xl border border-white/10 bg-zinc-900 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-bold">OBS 推流</h2>
+                <p className="mt-1 text-sm text-zinc-400">
+                  先生成凭证，在 OBS 中填写服务器和推流码，然后开始推流。
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/10"
+                  onClick={issueMediaSession}
+                  type="button"
+                >
+                  生成推流凭证
+                </button>
+                {room.status === "PREPARING" && (
+                  <button
+                    className="rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                    disabled={playback.status !== "PUBLISHING"}
+                    onClick={startLive}
+                    type="button"
+                  >
+                    开始直播
+                  </button>
+                )}
+              </div>
+            </div>
+            {credentials && (
+              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                <div className="rounded-xl bg-black/30 p-3">
+                  <dt className="text-zinc-500">服务器</dt>
+                  <dd className="mt-1 break-all font-mono text-zinc-200">
+                    {credentials.server_url}
+                  </dd>
+                </div>
+                <div className="rounded-xl bg-black/30 p-3">
+                  <dt className="text-zinc-500">推流码（请勿分享）</dt>
+                  <dd className="mt-1 break-all font-mono text-zinc-200">
+                    {credentials.stream_key}
+                  </dd>
+                </div>
+              </dl>
+            )}
+          </section>
+        )}
         <div className="mt-5 flex justify-end">
           <button
             className="rounded-xl border border-white/15 px-5 py-3 text-sm font-semibold transition hover:bg-white/10 disabled:opacity-50"

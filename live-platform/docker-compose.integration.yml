@@ -1,5 +1,5 @@
-# Run from the repository root with `make up`. Only the loopback web entry is
-# published; APIs and infrastructure remain inside the Compose network.
+# Run from the repository root with `make up`. The web entry and SRS media
+# ports are published; business APIs and other infrastructure remain internal.
 services:
   # Keep P2 runnable beside an existing standalone LUMI Compose project.
   mysql:

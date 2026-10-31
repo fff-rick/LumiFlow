@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState } from "react"
 import AppNav from "@/components/AppNav"
+import { useSession } from "@/components/SessionProvider"
 import "./FluxFeedHome.css"
 
 type FeedScene = "timeline" | "recommend" | "hot"
@@ -47,6 +48,7 @@ const scenes: Array<{ key: FeedScene; label: string; detail: string }> = [
 ]
 
 export default function FluxFeedHome() {
+  const { user, loading: sessionLoading } = useSession()
   const [scene, setScene] = useState<FeedScene>("timeline")
   const [videos, setVideos] = useState<FeedItem[]>([])
   const [rooms, setRooms] = useState<Room[]>([])
@@ -195,7 +197,7 @@ export default function FluxFeedHome() {
                 />
               ))
             ) : (
-              <EmptyFeed />
+              <EmptyFeed loading={sessionLoading} signedIn={Boolean(user)} />
             )}
           </div>
         </section>
@@ -213,6 +215,7 @@ export default function FluxFeedHome() {
               <Sparkles size={19} />
               <strong>直播间即将开播</strong>
               <span>创建房间后，这里会实时出现。</span>
+              <Link href="/live">去开启直播</Link>
             </div>
           )}
         </aside>
@@ -362,13 +365,27 @@ function FeedSkeletons() {
   )
 }
 
-function EmptyFeed() {
+function EmptyFeed({
+  loading,
+  signedIn,
+}: {
+  loading: boolean
+  signedIn: boolean
+}) {
   return (
     <div className="flux-feed-empty">
       <Sparkles size={26} />
       <h2>内容流已经就绪</h2>
-      <p>当前没有已发布视频。登录后可通过 FluxFeed 发布第一条内容。</p>
-      <Link href="/login">登录并开始使用</Link>
+      <p>
+        {signedIn
+          ? "当前没有已发布视频，可以发布第一条内容。"
+          : "当前没有已发布视频。登录后可通过 FluxFeed 发布第一条内容。"}
+      </p>
+      {!loading && (
+        <Link href={signedIn ? "/publish" : "/login"}>
+          {signedIn ? "发布第一条视频" : "登录并开始使用"}
+        </Link>
+      )}
     </div>
   )
 }
