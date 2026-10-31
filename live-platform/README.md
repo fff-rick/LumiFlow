@@ -210,6 +210,8 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | 历史消息 | `GET /api/v1/rooms/{room_id}/messages?limit=50` |
 | 观众榜 / 列表 | `GET /api/v1/rooms/{room_id}/top-viewers`、`viewers` |
 | 视频 | `POST /api/v1/videos`、`GET/DELETE /api/v1/videos/{video_id}`、`GET /api/v1/users/{user_id}/videos` |
+| 创作者与关注 | `GET /api/v1/users/{user_id}`、`GET /api/v1/users/me/following`、`PUT/DELETE /api/v1/users/me/following/{target_user_id}` |
+| 评论 | `GET/POST /api/v1/videos/{video_id}/comments`、`DELETE /api/v1/comments/{comment_id}` |
 | 钱包 | `GET /api/v1/wallet`、`GET /api/v1/wallet/transactions` |
 
 送礼必须携带唯一的 `Idempotency-Key` 请求头。单次礼物数量、用户限流和钱包余额均由后端校验。完整 HTTP、实时频道和 Kafka 事件契约见 [`doc/contracts/`](doc/contracts/README.md)。
