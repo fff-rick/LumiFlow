@@ -30,6 +30,7 @@ type Config struct {
 	Traffic       TrafficConfig
 	Worker        WorkerConfig
 	Projection    ProjectionConfig
+	Media         MediaConfig
 }
 
 type HTTPConfig struct{ Addr string }
@@ -60,6 +61,7 @@ type InteractionConfig struct {
 }
 type IdentityRoomConfig struct{ HTTPAddr, BaseURL string }
 type QueryConfig struct{ HTTPAddr, BaseURL string }
+type MediaConfig struct{ App, RTMPServerURL, WHEPBaseURL, CallbackToken string }
 type MySQLConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -518,10 +520,16 @@ func Load() (Config, error) {
 			SASLUsername:                  os.Getenv("KAFKA_SASL_USERNAME"),
 			SASLPassword:                  os.Getenv("KAFKA_SASL_PASSWORD"),
 		},
-		Outbox:        OutboxConfig{PollInterval: outboxPoll, BatchSize: outboxBatch, Lease: outboxLease, ProduceTimeout: outboxProduceTimeout},
-		Traffic:       TrafficConfig{HotViewers: hotViewers, ProtectViewers: protectViewers, HotDanmakuRate: hotRate, ProtectDanmakuRate: protectRate, HotSampleRate: hotSample, ProtectSampleRate: protectSample, RateWindow: rateWindow, AdaptiveEnabled: adaptiveEnabled, TargetFanoutRate: targetFanout, HotFanoutRate: hotFanout, ProtectFanoutRate: protectFanout, MinSampleRate: minSampleRate},
-		Worker:        WorkerConfig{Roles: workerRoles},
-		Projection:    ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, MaxStaleness: projectionMaxStaleness},
+		Outbox:     OutboxConfig{PollInterval: outboxPoll, BatchSize: outboxBatch, Lease: outboxLease, ProduceTimeout: outboxProduceTimeout},
+		Traffic:    TrafficConfig{HotViewers: hotViewers, ProtectViewers: protectViewers, HotDanmakuRate: hotRate, ProtectDanmakuRate: protectRate, HotSampleRate: hotSample, ProtectSampleRate: protectSample, RateWindow: rateWindow, AdaptiveEnabled: adaptiveEnabled, TargetFanoutRate: targetFanout, HotFanoutRate: hotFanout, ProtectFanoutRate: protectFanout, MinSampleRate: minSampleRate},
+		Worker:     WorkerConfig{Roles: workerRoles},
+		Projection: ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, MaxStaleness: projectionMaxStaleness},
+		Media: MediaConfig{
+			App:           env("MEDIA_APP", "live"),
+			RTMPServerURL: strings.TrimRight(env("MEDIA_RTMP_SERVER_URL", "rtmp://localhost:1935/live"), "/"),
+			WHEPBaseURL:   env("MEDIA_WHEP_BASE_URL", "http://localhost:1985/rtc/v1/whep/"),
+			CallbackToken: env("MEDIA_CALLBACK_TOKEN", "dev-media-callback-token-change-me"),
+		},
 		Observability: observability,
 	}, nil
 }

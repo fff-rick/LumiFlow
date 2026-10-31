@@ -6,6 +6,7 @@ import (
 	"github.com/example/live-platform/internal/auth"
 	"github.com/example/live-platform/internal/config"
 	"github.com/example/live-platform/internal/httpapi"
+	"github.com/example/live-platform/internal/media"
 	"github.com/example/live-platform/internal/observability"
 	"github.com/example/live-platform/internal/realtime"
 	"github.com/example/live-platform/internal/room"
@@ -74,7 +75,9 @@ func main() {
 	}()
 	tokens := auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL)
 	authService := auth.NewService(auth.NewRepository(identityDB, cfg.Kafka.IdentityDomainTopic), tokens)
-	h := httpapi.NewIdentityRoom(httpapi.Deps{Log: log, MySQL: databasePingers{identityDB, roomDB}, Redis: redis, Centrifugo: realtime.NewCentrifugo(cfg.Centrifugo.APIURL, cfg.Centrifugo.APIKey, m), Metrics: m, Auth: authService, AppTokens: tokens, InternalToken: cfg.Auth.InternalToken, CFTokens: cftoken.NewIssuer(cfg.Centrifugo.TokenSecret, cfg.Centrifugo.TokenTTL), CFSubTTL: cfg.Centrifugo.SubscriptionTokenTTL, Rooms: room.NewService(room.NewRepository(roomDB, cfg.Kafka.RoomIntegrationTopic, cfg.Kafka.RoomDomainTopic, cfg.Kafka.GovernanceTopic), authService), Stats: stats.NewService(stats.NewRedisStore(redis))})
+	roomService := room.NewService(room.NewRepository(roomDB, cfg.Kafka.RoomIntegrationTopic, cfg.Kafka.RoomDomainTopic, cfg.Kafka.GovernanceTopic), authService)
+	mediaService := media.NewService(media.NewRepository(roomDB), roomService, media.Config{App: cfg.Media.App, RTMPServerURL: cfg.Media.RTMPServerURL, WHEPBaseURL: cfg.Media.WHEPBaseURL})
+	h := httpapi.NewIdentityRoom(httpapi.Deps{Log: log, MySQL: databasePingers{identityDB, roomDB}, Redis: redis, Centrifugo: realtime.NewCentrifugo(cfg.Centrifugo.APIURL, cfg.Centrifugo.APIKey, m), Metrics: m, Auth: authService, AppTokens: tokens, InternalToken: cfg.Auth.InternalToken, MediaCallbackToken: cfg.Media.CallbackToken, CFTokens: cftoken.NewIssuer(cfg.Centrifugo.TokenSecret, cfg.Centrifugo.TokenTTL), CFSubTTL: cfg.Centrifugo.SubscriptionTokenTTL, Rooms: roomService, Media: mediaService, Stats: stats.NewService(stats.NewRedisStore(redis))})
 	srv := &http.Server{Addr: cfg.IdentityRoom.HTTPAddr, Handler: h, ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}
 	ch := make(chan error, 1)
 	go func() {

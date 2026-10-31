@@ -31,7 +31,7 @@ LUMI LIVE 是一个基于 **Go、Centrifugo、Redis、MySQL 和 Kafka** 的直�
   <a href="#压测与可观测性">压测与观测</a>
 </p>
 
-> 本项目聚焦直播**互动平面**。视频采集、转码和 CDN 属于可替换的媒体平面；接入 SRS、LiveKit 或云直播服务时，应继续保持两者分离。
+> 本项目以直播**互动平面**为核心，并已接入独立的 SRS 媒体平面第一阶段：OBS RTMP 推流与浏览器 WHEP 播放。转码、CDN 和录制仍保持为后续可替换能力。
 
 ## 项目是什么
 
@@ -50,11 +50,11 @@ LUMI LIVE 是一个基于 **Go、Centrifugo、Redis、MySQL 和 Kafka** 的直�
 
 ## 界面与互动流程
 
-内置 Web UI 由 `live-api` 直接提供，不需要额外启动前端工程。直播间把媒体流接入位、实时弹幕、礼物榜、在线观众、点赞、钱包和主播治理集中在同一页面。
+内置 Web UI 由 `live-api` 直接提供，不需要额外启动前端工程；融合模式使用根目录 Next.js 前端。Next.js 直播间已接入 SRS WHEP 播放，并把实时弹幕、在线观众和点赞集中在同一页面。
 
 ![LUMI LIVE 直播间界面能力示意](front_con/demo/live-room-preview.svg)
 
-<p align="center"><sub>界面能力示意，对应仓库内置的实际 Web UI；媒体区域是明确的外部视频流接入位。</sub></p>
+<p align="center"><sub>界面能力示意；融合 Next.js 页面中的媒体区域已接入 SRS WHEP。</sub></p>
 
 实时交互采用四条路径：
 
@@ -86,7 +86,7 @@ LUMI LIVE 的重点不是模拟播放器，而是展示**高并发互动业务�
 - **容量可验证**：仓库保留多轮压测方案、原始报告、优化记录和容量结论，而不是只给出未经验证的性能数字。
 - **适合继续演进**：既能以 Compose 一键体验，也保留微服务切流、HA 演练、Kubernetes 和 GitOps 的演进路径。
 
-它适合学习直播互动架构、事件驱动一致性、热点保护、可观测性与容量测试，也可以作为接入真实媒体服务前的互动层原型。它不能直接替代生产级视频云、内容审核、支付结算或多地域容灾系统。
+它适合学习直播互动架构、RTMP 到 WebRTC 媒体链路、事件驱动一致性、热点保护、可观测性与容量测试。它不能直接替代生产级视频云、内容审核、支付结算或多地域容灾系统。
 
 ## 怎么实现的
 
@@ -154,6 +154,7 @@ make compose-up
 | --- | --- | --- |
 | LUMI LIVE Web / API | [http://localhost:8080/](http://localhost:8080/) | 注册、开播、进房和互动 |
 | Centrifugo | [http://localhost:8000/](http://localhost:8000/) | WebSocket 实时接入 |
+| SRS RTMP / WHEP | `rtmp://localhost:1935/live` / [http://localhost:1985/](http://localhost:1985/) | OBS 推流与 WebRTC 信令 |
 | Worker 指标 | [http://localhost:19090/](http://localhost:19090/) | Worker 健康检查与指标 |
 | Prometheus | [http://localhost:19091/](http://localhost:19091/) | 指标查询 |
 | Grafana | [http://localhost:3000/](http://localhost:3000/) | 综合监控总览 |
@@ -204,6 +205,7 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | --- | --- |
 | 注册 / 登录 | `POST /api/v1/auth/register`、`POST /api/v1/auth/login` |
 | 直播间 | `GET/POST /api/v1/rooms`、`POST /api/v1/rooms/{room_id}/start` |
+| 直播媒体 | `POST /api/v1/rooms/{room_id}/media-session`、`GET /api/v1/rooms/{room_id}/playback` |
 | 进房 / 离房 | `POST /api/v1/rooms/{room_id}/join`、`POST /api/v1/rooms/{room_id}/leave` |
 | 弹幕 / 点赞 / 礼物 | `POST /api/v1/rooms/{room_id}/danmaku`、`like`、`gifts` |
 | 实时令牌 | `POST /api/v1/realtime/token` |
@@ -228,6 +230,9 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | `REDIS_ADDR` / `REDIS_URL` | Redis 地址或 `redis://` / `rediss://` URL |
 | `KAFKA_BROKERS` | Kafka Broker 列表；Gateway 不需要 |
 | `AUTH_JWT_SECRET` | 应用 JWT 密钥 |
+| `SRS_CANDIDATE` | SRS 写入 WebRTC SDP 的宿主机可达 IP；仅本机访问时默认 `127.0.0.1` |
+| `MEDIA_RTMP_SERVER_URL` / `MEDIA_WHEP_BASE_URL` | 返回给 OBS 和浏览器的公开媒体地址 |
+| `MEDIA_CALLBACK_TOKEN` | SRS 回调媒体控制面的独立内部令牌；生产环境必须替换 |
 | `FLUXFEED_BASE_URL` | 必填；FluxFeed 统一注册、登录、令牌校验与视频内容服务地址，例如 `http://fluxfeed-api:8080` |
 | `INTERNAL_SERVICE_TOKEN` | 网关向 Identity 同步 FluxFeed 用户投影的内部服务令牌；必须与 Identity 服务一致 |
 | `CENTRIFUGO_API_KEY` / `CENTRIFUGO_TOKEN_SECRET` | Centrifugo 服务端与令牌密钥 |
@@ -299,4 +304,4 @@ make record-release ARGS='--service live-api --version v1.2.3 --revision <git-sh
 
 ## 项目边界
 
-本项目不包含真实视频推流、转码、CDN、生产级内容审核、真实支付结算或跨地域灾备。接入这些系统时，应保持媒体平面与互动平面分离，并重新完成目标场景下的安全、容量与故障验证。
+本项目已包含 SRS 单节点 RTMP 推流、推流鉴权、状态回调和 WHEP 播放，但不包含生产级转码、CDN、录制、内容审核、真实支付结算或跨地域灾备。扩展这些能力时，应保持媒体平面与互动平面分离，并重新完成目标场景下的安全、容量与故障验证。

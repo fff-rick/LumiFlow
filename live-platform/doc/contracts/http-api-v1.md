@@ -16,6 +16,7 @@
 | GET/POST | `/rooms` | GET 公开；POST 必需 | 账户-房间服务 |
 | GET | `/rooms/{room_id}`、`/messages`、`/top-viewers`、`/viewers`、`/stats` | 公开 | 房间、归档或统计读模型 |
 | POST | `/rooms/{room_id}/start`、`/stop` | 必需 | 账户-房间服务 |
+| POST / GET | `/rooms/{room_id}/media-session`、`/playback` | POST 必需；GET 公开 | 账户-房间服务 / SRS 媒体控制面 |
 | POST | `/rooms/{room_id}/join`、`/leave`、`/heartbeat` | 必需 | 互动接入服务 |
 | POST | `/rooms/{room_id}/danmaku`、`/like` | 必需 | 互动接入服务 |
 | GET | `/gifts` | 公开 | 钱包-礼物服务 |
