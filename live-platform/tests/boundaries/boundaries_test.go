@@ -137,6 +137,7 @@ func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 		"danmaku":         set("danmaku_records"),
 		"eventdedup":      set("processed_events"),
 		"like":            set("room_like_snapshots"),
+		"media":           set("live_media_sessions"),
 		"outbox":          set("outbox_events"),
 		"projectionevent": set("outbox_events"),
 		"httpapi":         set("room_message_feed"),

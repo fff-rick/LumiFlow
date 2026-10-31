@@ -19,6 +19,7 @@ import (
 	"github.com/example/live-platform/internal/danmaku"
 	"github.com/example/live-platform/internal/idgen"
 	"github.com/example/live-platform/internal/like"
+	"github.com/example/live-platform/internal/media"
 	"github.com/example/live-platform/internal/observability"
 	"github.com/example/live-platform/internal/realtime"
 	"github.com/example/live-platform/internal/room"
@@ -54,9 +55,11 @@ type Server struct {
 	profiles      UserReader
 	appTokens     *auth.TokenManager
 	internalToken string
+	mediaCallbackToken string
 	cfTokens      *cftoken.Issuer
 	cfSubTTL      time.Duration
 	rooms         RoomAPI
+	media         MediaAPI
 	danmaku       *danmaku.Service
 	likes         *like.Service
 	viewers       *viewer.Service
@@ -76,9 +79,11 @@ type Deps struct {
 	Profiles      UserReader
 	AppTokens     *auth.TokenManager
 	InternalToken string
+	MediaCallbackToken string
 	CFTokens      *cftoken.Issuer
 	CFSubTTL      time.Duration
 	Rooms         RoomAPI
+	Media         MediaAPI
 	Danmaku       *danmaku.Service
 	Likes         *like.Service
 	Viewers       *viewer.Service
@@ -103,6 +108,13 @@ type RoomAPI interface {
 	Ban(context.Context, int64, int64, int64, string) error
 	Unban(context.Context, int64, int64, int64) error
 	ListBans(context.Context, int64, int64) ([]room.Ban, error)
+}
+
+type MediaAPI interface {
+	IssueCredentials(context.Context, int64, int64) (media.Credentials, error)
+	Playback(context.Context, int64) (media.Playback, error)
+	RequirePublishing(context.Context, int64) error
+	HandleSRSCallback(context.Context, media.SRSCallback) error
 }
 
 func (s *Server) handler(service string) http.Handler {
@@ -134,7 +146,7 @@ func NewInteraction(d Deps) http.Handler {
 // NewIdentityRoom is the Stage 4 owner for identity, room lifecycle and
 // governance. The gateway forwards the existing v1 contract unchanged.
 func NewIdentityRoom(d Deps) http.Handler {
-	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, governance: d.Governance, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, stats: d.Stats, mux: http.NewServeMux()}
+	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, governance: d.Governance, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, mediaCallbackToken: d.MediaCallbackToken, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, media: d.Media, stats: d.Stats, mux: http.NewServeMux()}
 	if s.governance == nil {
 		if governance, ok := d.Redis.(GovernanceStore); ok {
 			s.governance = governance
@@ -154,6 +166,8 @@ func NewIdentityRoom(d Deps) http.Handler {
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}", s.getRoom)
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/start", s.requireAuth(s.startRoom))
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/stop", s.requireAuth(s.stopRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/media-session", s.requireAuth(s.issueMediaSession))
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/playback", s.getPlayback)
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/mutes", s.requireAuth(s.muteUser))
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/mutes", s.requireAuth(s.listMutes))
 	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.requireAuth(s.unmuteUser))
@@ -161,6 +175,7 @@ func NewIdentityRoom(d Deps) http.Handler {
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/bans", s.requireAuth(s.listBans))
 	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.requireAuth(s.unbanUser))
 	s.mux.HandleFunc("POST /internal/v1/users/fluxfeed-sync", s.requireInternal(s.syncFluxFeedUser))
+	s.mux.HandleFunc("POST /internal/v1/media/srs/callback", s.srsCallback)
 	// Internal, versioned read contract for the interaction migration. It is not
 	// exposed by the public gateway Service.
 	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}/access/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
@@ -575,12 +590,86 @@ func (s *Server) startRoom(w http.ResponseWriter, r *http.Request, userID int64)
 	if !ok {
 		return
 	}
+	current, err := s.rooms.Get(r.Context(), roomID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	if current.AnchorID != userID {
+		handleRoomError(w, room.ErrForbidden)
+		return
+	}
+	if s.media != nil {
+		if err := s.media.RequirePublishing(r.Context(), roomID); err != nil {
+			handleMediaError(w, err)
+			return
+		}
+	}
 	v, err := s.rooms.Start(r.Context(), roomID, userID)
 	if err != nil {
 		handleRoomError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) issueMediaSession(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "MEDIA_UNAVAILABLE", "media service unavailable")
+		return
+	}
+	credentials, err := s.media.IssueCredentials(r.Context(), roomID, userID)
+	if err != nil {
+		handleMediaError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, credentials)
+}
+
+func (s *Server) getPlayback(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "MEDIA_UNAVAILABLE", "media service unavailable")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	playback, err := s.media.Playback(r.Context(), roomID)
+	if err != nil {
+		handleMediaError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, playback)
+}
+
+func (s *Server) srsCallback(w http.ResponseWriter, r *http.Request) {
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "MEDIA_UNAVAILABLE", "media service unavailable")
+		return
+	}
+	want := strings.TrimSpace(s.mediaCallbackToken)
+	got := strings.TrimSpace(r.URL.Query().Get("token"))
+	if want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid callback token")
+		return
+	}
+	var callback media.SRSCallback
+	if err := decodeJSON(w, r, 32<<10, &callback); err != nil {
+		writeJSON(w, http.StatusOK, map[string]int{"code": 1})
+		return
+	}
+	if err := s.media.HandleSRSCallback(r.Context(), callback); err != nil {
+		s.log.Warn("reject SRS callback", "error", err, "action", callback.Action, "stream", callback.Stream)
+		writeJSON(w, http.StatusOK, map[string]int{"code": 1})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"code": 0})
 }
 
 func (s *Server) stopRoom(w http.ResponseWriter, r *http.Request, userID int64) {
@@ -977,6 +1066,8 @@ func handleRoomError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "ROOM_BANNED", err.Error())
 	case errors.Is(err, room.ErrForbidden):
 		writeError(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+	case errors.Is(err, room.ErrInvalidState):
+		writeError(w, http.StatusConflict, "INVALID_ROOM_STATE", err.Error())
 	case errors.Is(err, room.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, "USER_NOT_FOUND", err.Error())
 	case errors.Is(err, room.ErrInvalidInput):
@@ -987,6 +1078,21 @@ func handleRoomError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "INVALID_ROOM_STATE", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "room operation failed")
+	}
+}
+
+func handleMediaError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, room.ErrNotFound):
+		writeError(w, http.StatusNotFound, "ROOM_NOT_FOUND", err.Error())
+	case errors.Is(err, room.ErrForbidden):
+		writeError(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+	case errors.Is(err, media.ErrNotPublishing):
+		writeError(w, http.StatusConflict, "MEDIA_NOT_PUBLISHING", "start OBS streaming before going live")
+	case errors.Is(err, media.ErrAlreadyPublishing):
+		writeError(w, http.StatusConflict, "MEDIA_ALREADY_PUBLISHING", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "MEDIA_ERROR", "media operation failed")
 	}
 }
 

@@ -180,6 +180,8 @@ func (s *Server) routes(identity, interaction, commerce, query, fluxContent, flu
 	s.mux.Handle("GET /api/v1/rooms/{room_id}", identity)
 	s.mux.Handle("POST /api/v1/rooms/{room_id}/start", s.protected(identity))
 	s.mux.Handle("POST /api/v1/rooms/{room_id}/stop", s.protected(identity))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/media-session", s.protected(identity))
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/playback", identity)
 	s.mux.Handle("POST /api/v1/rooms/{room_id}/mutes", s.protected(identity))
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/mutes", s.protected(identity))
 	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.protected(identity))
