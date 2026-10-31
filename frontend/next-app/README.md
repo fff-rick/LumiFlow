@@ -18,4 +18,4 @@ make down
 make check
 ```
 
-`LUMIFLOW_API_ORIGIN` 只被 Next 服务端的 BFF 路由使用，不会暴露给浏览器。`.env.example` 仅用于脱离融合 Compose 的本地 `npm run dev` 调试；正常运行新系统不需要复制它。
+`LUMIFLOW_API_ORIGIN` 只被 Next 服务端的 BFF 路由使用，不会暴露给浏览器。直播页在本机通过 `ws://127.0.0.1:8000/connection/websocket` 连接 Centrifugo，非本机部署使用当前站点同源 WebSocket 入口。`.env.example` 仅用于脱离融合 Compose 的本地 `npm run dev` 调试；正常运行新系统不需要复制它。
