@@ -660,7 +660,13 @@ func (s *Server) srsCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var callback media.SRSCallback
-	if err := decodeJSON(w, r, 32<<10, &callback); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
+	if err := decoder.Decode(&callback); err != nil {
+		writeJSON(w, http.StatusOK, map[string]int{"code": 1})
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusOK, map[string]int{"code": 1})
 		return
 	}

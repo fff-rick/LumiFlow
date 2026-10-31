@@ -45,4 +45,11 @@ func TestSRSCallbackRequiresToken(t *testing.T) {
 	if response.Code != http.StatusOK || response.Body.String() != "{\"code\":0}\n" || service.callbacks != 1 {
 		t.Fatalf("status=%d body=%q callbacks=%d", response.Code, response.Body.String(), service.callbacks)
 	}
+
+	request = httptest.NewRequest(http.MethodPost, "/internal/v1/media/srs/callback?token=secret", strings.NewReader(`{"action":"on_play","app":"live","stream":"room-1","pageUrl":"","clients":2}`))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "{\"code\":0}\n" || service.callbacks != 2 {
+		t.Fatalf("status=%d body=%q callbacks=%d", response.Code, response.Body.String(), service.callbacks)
+	}
 }

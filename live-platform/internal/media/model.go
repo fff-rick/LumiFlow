@@ -40,17 +40,11 @@ type Playback struct {
 }
 
 type SRSCallback struct {
-	ServerID  string `json:"server_id"`
-	ServiceID string `json:"service_id"`
-	Action    string `json:"action"`
-	ClientID  string `json:"client_id"`
-	Type      string `json:"type"`
-	IP        string `json:"ip"`
-	VHost     string `json:"vhost"`
-	App       string `json:"app"`
-	TCURL     string `json:"tcUrl"`
-	Stream    string `json:"stream"`
-	Param     string `json:"param"`
-	StreamURL string `json:"stream_url"`
-	StreamID  string `json:"stream_id"`
+	Action   string `json:"action"`
+	ClientID string `json:"client_id"`
+	IP       string `json:"ip"`
+	VHost    string `json:"vhost"`
+	App      string `json:"app"`
+	Stream   string `json:"stream"`
+	Param    string `json:"param"`
 }
