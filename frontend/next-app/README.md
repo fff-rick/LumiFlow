@@ -27,4 +27,6 @@ make check
 3. OBS 使用 H.264 视频编码并开始推流；页面媒体状态变为 `PUBLISHING` 后点击「开始直播」。
 4. 观众打开同一直播间，浏览器会直接与 SRS 完成 WHEP 协商并播放。
 
+主播临时断流后可以直接在 OBS 中重新开始推流；确认不再重连时，点击直播间里的「结束直播」。本地融合环境可运行 `make -C live-platform smoke-srs-media`，自动验证 RTMP 推流、SRS 状态回调、WHEP 协商和停播闭环。
+
 跨设备测试时，启动前先设置 `SRS_CANDIDATE=<宿主机局域网 IP>`，同时将 `MEDIA_RTMP_SERVER_URL` 和 `MEDIA_WHEP_BASE_URL` 配成客户端可访问地址。HTTPS 页面必须通过 HTTPS 反向代理暴露 WHEP，避免浏览器拦截混合内容。
