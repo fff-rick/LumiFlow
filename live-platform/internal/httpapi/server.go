@@ -44,50 +44,50 @@ type HistoryStore interface {
 }
 
 type Server struct {
-	log           *slog.Logger
-	mysql         Pinger
-	history       HistoryStore
-	redis         Pinger
-	centrifugo    RealtimeController
-	governance    GovernanceStore
-	metrics       *observability.Metrics
-	auth          *auth.Service
-	profiles      UserReader
-	appTokens     *auth.TokenManager
-	internalToken string
+	log                *slog.Logger
+	mysql              Pinger
+	history            HistoryStore
+	redis              Pinger
+	centrifugo         RealtimeController
+	governance         GovernanceStore
+	metrics            *observability.Metrics
+	auth               *auth.Service
+	profiles           UserReader
+	appTokens          *auth.TokenManager
+	internalToken      string
 	mediaCallbackToken string
-	cfTokens      *cftoken.Issuer
-	cfSubTTL      time.Duration
-	rooms         RoomAPI
-	media         MediaAPI
-	danmaku       *danmaku.Service
-	likes         *like.Service
-	viewers       *viewer.Service
-	stats         *stats.Service
-	mux           *http.ServeMux
+	cfTokens           *cftoken.Issuer
+	cfSubTTL           time.Duration
+	rooms              RoomAPI
+	media              MediaAPI
+	danmaku            *danmaku.Service
+	likes              *like.Service
+	viewers            *viewer.Service
+	stats              *stats.Service
+	mux                *http.ServeMux
 }
 
 type Deps struct {
-	Log           *slog.Logger
-	MySQL         Pinger
-	History       HistoryStore
-	Redis         Pinger
-	Centrifugo    RealtimeController
-	Governance    GovernanceStore
-	Metrics       *observability.Metrics
-	Auth          *auth.Service
-	Profiles      UserReader
-	AppTokens     *auth.TokenManager
-	InternalToken string
+	Log                *slog.Logger
+	MySQL              Pinger
+	History            HistoryStore
+	Redis              Pinger
+	Centrifugo         RealtimeController
+	Governance         GovernanceStore
+	Metrics            *observability.Metrics
+	Auth               *auth.Service
+	Profiles           UserReader
+	AppTokens          *auth.TokenManager
+	InternalToken      string
 	MediaCallbackToken string
-	CFTokens      *cftoken.Issuer
-	CFSubTTL      time.Duration
-	Rooms         RoomAPI
-	Media         MediaAPI
-	Danmaku       *danmaku.Service
-	Likes         *like.Service
-	Viewers       *viewer.Service
-	Stats         *stats.Service
+	CFTokens           *cftoken.Issuer
+	CFSubTTL           time.Duration
+	Rooms              RoomAPI
+	Media              MediaAPI
+	Danmaku            *danmaku.Service
+	Likes              *like.Service
+	Viewers            *viewer.Service
+	Stats              *stats.Service
 }
 type UserReader interface {
 	User(context.Context, int64) (auth.User, error)
