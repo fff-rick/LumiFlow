@@ -86,10 +86,16 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
   useEffect(() => {
     let active = true
     async function refresh() {
-      const next = await get<MediaPlayback>(
-        `/api/platform/v1/rooms/${roomId}/playback`
-      )
-      if (active && next) setPlayback(next)
+      const [nextPlayback, nextRoom] = await Promise.all([
+        get<MediaPlayback>(`/api/platform/v1/rooms/${roomId}/playback`),
+        get<Room>(`/api/platform/v1/rooms/${roomId}`),
+      ])
+      if (!active) return
+      if (nextPlayback) setPlayback(nextPlayback)
+      if (nextRoom)
+        setRoom((current) =>
+          current?.status === "CLOSED" ? current : nextRoom
+        )
     }
     void refresh()
     const timer = window.setInterval(refresh, 3000)
@@ -272,6 +278,18 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     setNotice("直播已开始。")
   }
 
+  async function stopLive() {
+    if (!window.confirm("确定结束直播吗？结束后该直播间不能重新开启。")) return
+    const result = await post<Room>(`/api/platform/v1/rooms/${roomId}/stop`)
+    if (!result.ok) return setNotice(result.message)
+    setRoom(result.data)
+    setPlayback({})
+    setCredentials(null)
+    setJoined(false)
+    setRealtimeSession(null)
+    setNotice("直播已结束，请在 OBS 中停止推流。")
+  }
+
   if (!room)
     return (
       <main className="grid min-h-svh place-items-center bg-zinc-950 p-6 text-zinc-300">
@@ -328,11 +346,13 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
                     {living ? "LIVE" : room.status}
                   </span>
                   <h2 className="mt-5 text-xl font-bold">
-                    {playback.status === "PUBLISHING"
-                      ? "推流已就绪，等待开播"
-                      : playback.status === "DISCONNECTED"
-                        ? "主播暂时断开推流"
-                        : "等待主播推流"}
+                    {!living
+                      ? "直播已结束"
+                      : playback.status === "PUBLISHING"
+                        ? "推流已就绪，等待开播"
+                        : playback.status === "DISCONNECTED"
+                          ? "主播暂时断开推流"
+                          : "等待主播推流"}
                   </h2>
                   <p className="mt-3 max-w-md text-sm leading-6 text-zinc-300">
                     {playback.status
@@ -395,7 +415,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
             </form>
           </aside>
         </div>
-        {user?.id === room.anchor_id && (
+        {user?.id === room.anchor_id && room.status !== "CLOSED" && (
           <section className="mt-5 rounded-3xl border border-white/10 bg-zinc-900 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -422,19 +442,33 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
                     开始直播
                   </button>
                 )}
+                {living && (
+                  <button
+                    className="rounded-xl border border-red-400/50 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-400/10"
+                    onClick={stopLive}
+                    type="button"
+                  >
+                    结束直播
+                  </button>
+                )}
               </div>
             </div>
+            {living && playback.status === "DISCONNECTED" && (
+              <p className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+                OBS 推流已断开。重新开始推流可继续直播；不再重连时请结束直播。
+              </p>
+            )}
             {credentials && (
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <div className="rounded-xl bg-black/30 p-3">
                   <dt className="text-zinc-500">服务器</dt>
-                  <dd className="mt-1 break-all font-mono text-zinc-200">
+                  <dd className="mt-1 font-mono break-all text-zinc-200">
                     {credentials.server_url}
                   </dd>
                 </div>
                 <div className="rounded-xl bg-black/30 p-3">
                   <dt className="text-zinc-500">推流码（请勿分享）</dt>
-                  <dd className="mt-1 break-all font-mono text-zinc-200">
+                  <dd className="mt-1 font-mono break-all text-zinc-200">
                     {credentials.stream_key}
                   </dd>
                 </div>

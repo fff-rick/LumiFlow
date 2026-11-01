@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react"
 export default function WHEPPlayer({ url }: { url: string }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState("")
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -17,6 +18,9 @@ export default function WHEPPlayer({ url }: { url: string }) {
       if (!videoRef.current) return
       videoRef.current.srcObject =
         event.streams[0] ?? new MediaStream([event.track])
+    }
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "failed") setError("视频连接失败，请重试")
     }
 
     async function play() {
@@ -36,6 +40,7 @@ export default function WHEPPlayer({ url }: { url: string }) {
         type: "answer",
         sdp: await response.text(),
       })
+      setError("")
       await videoRef.current?.play()
     }
 
@@ -51,7 +56,7 @@ export default function WHEPPlayer({ url }: { url: string }) {
           () => undefined
         )
     }
-  }, [url])
+  }, [attempt, url])
 
   return (
     <div className="absolute inset-0 bg-black">
@@ -64,9 +69,19 @@ export default function WHEPPlayer({ url }: { url: string }) {
         ref={videoRef}
       />
       {error && (
-        <p className="absolute inset-x-5 top-5 rounded-xl bg-red-950/90 px-4 py-3 text-sm text-red-100">
-          {error}
-        </p>
+        <div className="absolute inset-x-5 top-5 flex items-center justify-between gap-4 rounded-xl bg-red-950/90 px-4 py-3 text-sm text-red-100">
+          <p>{error}</p>
+          <button
+            className="shrink-0 rounded-lg border border-red-200/40 px-3 py-1 font-semibold hover:bg-red-100/10"
+            onClick={() => {
+              setError("")
+              setAttempt((value) => value + 1)
+            }}
+            type="button"
+          >
+            重试
+          </button>
+        </div>
       )}
     </div>
   )

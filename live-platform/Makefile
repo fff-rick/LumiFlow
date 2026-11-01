@@ -154,9 +154,12 @@ gitops-demo-preflight:
 phase1-k8s-validate:
 	python3 scripts/phase1_k8s_static_validate.py
 
-.PHONY: smoke-ui
+.PHONY: smoke-ui smoke-srs-media
 smoke-ui:
 	./scripts/ui_smoke.sh
+
+smoke-srs-media:
+	./scripts/srs_media_smoke.sh
 
 .PHONY: ha-local-create ha-local-kafka
 ha-local-create:
