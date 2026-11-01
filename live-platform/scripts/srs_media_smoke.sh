@@ -28,6 +28,20 @@ wait_for_media_status() {
   return 1
 }
 
+wait_for_recording() {
+  local room_id="$1" url=""
+  for _ in $(seq 1 40); do
+    url="$(curl -fsS -b "$COOKIE" "$BASE_URL/api/platform/v1/rooms/$room_id/recordings" | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items", []); print(items[0].get("playback_url", "") if items else "")' 2>/dev/null || true)"
+    if [[ -n "$url" ]]; then
+      printf '%s' "$url"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "recording was not published" >&2
+  return 1
+}
+
 [[ -n "$SRS_CONTAINER" ]] || { echo "SRS container is not running" >&2; exit 1; }
 curl -fsS "$BASE_URL" >/dev/null
 curl -fsS "$SRS_API_URL/api/v1/versions" >/dev/null
@@ -108,4 +122,10 @@ STOPPED="$(curl -fsS -b "$COOKIE" -X POST "$BASE_URL/api/platform/v1/rooms/$ROOM
 wait "$FFMPEG_PID"
 wait_for_media_status "$ROOM_ID" DISCONNECTED
 
-echo "SRS media smoke: PASS (room=$ROOM_ID, RTMP, callbacks, WHEP, stop)"
+echo "[srs] verify DVR callback and MP4 replay"
+RECORDING_URL="$(wait_for_recording "$ROOM_ID")"
+curl -fsS "$RECORDING_URL" -o "$TMP/recording.mp4"
+[[ -s "$TMP/recording.mp4" ]]
+head -c 64 "$TMP/recording.mp4" | grep -aq 'ftyp'
+
+echo "SRS media smoke: PASS (room=$ROOM_ID, RTMP, callbacks, WHEP, DVR replay, stop)"

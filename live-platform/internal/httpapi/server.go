@@ -113,6 +113,7 @@ type RoomAPI interface {
 type MediaAPI interface {
 	IssueCredentials(context.Context, int64, int64) (media.Credentials, error)
 	Playback(context.Context, int64) (media.Playback, error)
+	Recordings(context.Context, int64) ([]media.Recording, error)
 	RequirePublishing(context.Context, int64) error
 	HandleSRSCallback(context.Context, media.SRSCallback) error
 }
@@ -168,6 +169,7 @@ func NewIdentityRoom(d Deps) http.Handler {
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/stop", s.requireAuth(s.stopRoom))
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/media-session", s.requireAuth(s.issueMediaSession))
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/playback", s.getPlayback)
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/recordings", s.getRecordings)
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/mutes", s.requireAuth(s.muteUser))
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/mutes", s.requireAuth(s.listMutes))
 	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.requireAuth(s.unmuteUser))
@@ -646,6 +648,24 @@ func (s *Server) getPlayback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, playback)
+}
+
+func (s *Server) getRecordings(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	if s.media == nil {
+		writeError(w, http.StatusServiceUnavailable, "MEDIA_UNAVAILABLE", "media service unavailable")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	items, err := s.media.Recordings(r.Context(), roomID)
+	if err != nil {
+		handleMediaError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) srsCallback(w http.ResponseWriter, r *http.Request) {

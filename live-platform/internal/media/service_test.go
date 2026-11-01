@@ -9,7 +9,10 @@ import (
 	"github.com/example/live-platform/internal/room"
 )
 
-type fakeStore struct{ session Session }
+type fakeStore struct {
+	session    Session
+	recordings []Recording
+}
 
 func (f *fakeStore) Save(_ context.Context, value Session) (Session, error) {
 	f.session = value
@@ -30,6 +33,20 @@ func (f *fakeStore) ByStream(_ context.Context, app, stream string) (Session, er
 func (f *fakeStore) SetStatus(_ context.Context, _ int64, status Status) error {
 	f.session.Status = status
 	return nil
+}
+func (f *fakeStore) SaveRecording(_ context.Context, value Recording) (Recording, error) {
+	value.ID = int64(len(f.recordings) + 1)
+	f.recordings = append(f.recordings, value)
+	return value, nil
+}
+func (f *fakeStore) ListRecordings(_ context.Context, roomID int64) ([]Recording, error) {
+	var items []Recording
+	for _, value := range f.recordings {
+		if value.RoomID == roomID {
+			items = append(items, value)
+		}
+	}
+	return items, nil
 }
 
 type fakeRooms struct{ value room.Room }
@@ -108,5 +125,36 @@ func TestPlaybackRequiresLivingRoom(t *testing.T) {
 	}
 	if err := living.HandleSRSCallback(context.Background(), SRSCallback{Action: "on_play", App: "live", Stream: "room-12"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDVRCallbackPublishesRecordingURL(t *testing.T) {
+	store := &fakeStore{session: Session{RoomID: 12, Provider: "srs", App: "live", StreamName: "room-12"}}
+	service := NewService(store, fakeRooms{room.Room{ID: 12}}, Config{
+		App: "live", RecordingBaseURL: "http://localhost:8085/recordings/",
+	})
+	if err := service.HandleSRSCallback(context.Background(), SRSCallback{
+		Action: "on_dvr", App: "live", Stream: "room-12",
+		File: "./objs/nginx/html/recordings/live/room-12.1793520000000.mp4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.Recordings(context.Background(), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].PlaybackURL != "http://localhost:8085/recordings/live/room-12.1793520000000.mp4" {
+		t.Fatalf("recordings=%+v", items)
+	}
+}
+
+func TestDVRCallbackRejectsMismatchedFile(t *testing.T) {
+	store := &fakeStore{session: Session{RoomID: 12, Provider: "srs", App: "live", StreamName: "room-12"}}
+	service := NewService(store, fakeRooms{}, Config{App: "live"})
+	err := service.HandleSRSCallback(context.Background(), SRSCallback{
+		Action: "on_dvr", App: "live", Stream: "room-12", File: "/recordings/live/room-99.1.mp4",
+	})
+	if !errors.Is(err, ErrInvalidCallback) {
+		t.Fatalf("err=%v", err)
 	}
 }

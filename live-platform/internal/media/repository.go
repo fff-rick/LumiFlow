@@ -9,6 +9,45 @@ import (
 type DB interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func (r *Repository) SaveRecording(ctx context.Context, value Recording) (Recording, error) {
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO live_recordings(room_id, provider, object_key, created_at)
+VALUES (?, ?, ?, NOW(3))
+ON DUPLICATE KEY UPDATE object_key=VALUES(object_key)`, value.RoomID, value.Provider, value.ObjectKey)
+	if err != nil {
+		return Recording{}, err
+	}
+	return scanRecording(r.db.QueryRowContext(ctx, `
+SELECT id, room_id, provider, object_key, created_at
+FROM live_recordings WHERE object_key=? LIMIT 1`, value.ObjectKey))
+}
+
+func (r *Repository) ListRecordings(ctx context.Context, roomID int64) ([]Recording, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, room_id, provider, object_key, created_at
+FROM live_recordings WHERE room_id=? ORDER BY created_at DESC, id DESC`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Recording, 0)
+	for rows.Next() {
+		var value Recording
+		if err := rows.Scan(&value.ID, &value.RoomID, &value.Provider, &value.ObjectKey, &value.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}
+
+func scanRecording(row *sql.Row) (Recording, error) {
+	var value Recording
+	err := row.Scan(&value.ID, &value.RoomID, &value.Provider, &value.ObjectKey, &value.CreatedAt)
+	return value, err
 }
 
 type Repository struct{ db DB }
