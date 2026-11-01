@@ -298,6 +298,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     )
 
   const living = room.status === "LIVING"
+  const playing = playback.status === "PUBLISHING" && Boolean(playback.whep_url)
   return (
     <main className="min-h-svh bg-zinc-950 text-white">
       <AppNav />
@@ -336,10 +337,10 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="relative aspect-video overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,.45),transparent_32%),linear-gradient(135deg,#15152b,#09090b)]">
             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.03)_1px,transparent_1px)] bg-[size:30px_30px]" />
-            {playback.status === "PUBLISHING" && playback.whep_url && (
+            {playing && playback.whep_url && (
               <WHEPPlayer url={playback.whep_url} />
             )}
-            {!(playback.status === "PUBLISHING" && playback.whep_url) && (
+            {!playing && (
               <div className="relative grid h-full place-items-center p-8 text-center">
                 <div>
                   <span className="rounded-full bg-red-500 px-3 py-1 text-xs font-bold">
@@ -362,7 +363,9 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
                 </div>
               </div>
             )}
-            <div className="absolute bottom-0 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300">
+            <div
+              className={`pointer-events-none absolute z-20 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300 ${playing ? "bottom-14" : "bottom-0"}`}
+            >
               <span>◉ {metric(stats.viewer_count)} 在线</span>
               <span>♥ {metric(stats.like_count)} 点赞</span>
             </div>
