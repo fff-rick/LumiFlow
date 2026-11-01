@@ -127,3 +127,23 @@
     @apply font-sans;
     }
 }
+
+@keyframes live-danmaku-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-100vw - 100%));
+  }
+}
+
+.live-danmaku {
+  animation: live-danmaku-scroll 8s linear forwards;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-danmaku {
+    animation-duration: 1ms;
+  }
+}

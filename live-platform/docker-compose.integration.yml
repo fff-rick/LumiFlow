@@ -1,5 +1,6 @@
 # Run from the repository root with `make up`. The web entry and SRS media
-# ports are published; business APIs and other infrastructure remain internal.
+# ports and the local realtime socket are published; business APIs and other
+# infrastructure remain internal.
 services:
   # Keep P2 runnable beside an existing standalone LUMI Compose project.
   mysql:
@@ -18,7 +19,7 @@ services:
     ports: !reset []
 
   centrifugo:
-    ports: !reset []
+    ports: !override ["127.0.0.1:8000:8000"]
 
   alertmanager:
     ports: !reset []
