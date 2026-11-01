@@ -32,7 +32,7 @@ FROM live_recordings WHERE room_id=? ORDER BY created_at DESC, id DESC`, roomID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]Recording, 0)
 	for rows.Next() {
 		var value Recording
