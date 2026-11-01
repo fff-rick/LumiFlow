@@ -59,7 +59,7 @@ export default function WHEPPlayer({ url }: { url: string }) {
   }, [attempt, url])
 
   return (
-    <div className="absolute inset-0 bg-black">
+    <div className="absolute inset-0 z-10 bg-black">
       <video
         autoPlay
         className="h-full w-full object-contain"

@@ -24,6 +24,17 @@ type Message = {
   gift_name?: string
   count?: number
 }
+type FloatingMessage = Message & { lane: number }
+type Gift = { gift_id: number; name: string; price: number }
+type Wallet = { balance: number }
+type GiftSendResult = {
+  order: {
+    order_no: string
+    gift_name: string
+    gift_count: number
+    total_amount: number
+  }
+}
 type Subscription = { channel: string; token: string }
 type JoinResponse = {
   stats?: Stats
@@ -48,6 +59,13 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
   const [room, setRoom] = useState<Room | null>(null)
   const [stats, setStats] = useState<Stats>({ viewer_count: 0, like_count: 0 })
   const [messages, setMessages] = useState<Message[]>([])
+  const [floatingMessages, setFloatingMessages] = useState<FloatingMessage[]>(
+    []
+  )
+  const [gifts, setGifts] = useState<Gift[]>([])
+  const [balance, setBalance] = useState<number | null>(null)
+  const [sendingGiftId, setSendingGiftId] = useState<number | null>(null)
+  const [crediting, setCrediting] = useState(false)
   const [joined, setJoined] = useState(false)
   const [heartbeatSeconds, setHeartbeatSeconds] = useState(20)
   const [realtimeSession, setRealtimeSession] = useState<JoinResponse | null>(
@@ -82,6 +100,21 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
       active = false
     }
   }, [roomId])
+
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      get<{ items?: Gift[] }>("/api/platform/v1/gifts"),
+      user ? get<Wallet>("/api/platform/v1/wallet") : Promise.resolve(null),
+    ]).then(([catalog, wallet]) => {
+      if (!active) return
+      setGifts(catalog?.items ?? [])
+      setBalance(wallet?.balance ?? null)
+    })
+    return () => {
+      active = false
+    }
+  }, [user])
 
   useEffect(() => {
     let active = true
@@ -166,8 +199,12 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         }
         if (event.type === "danmaku" || event.type === "gift") {
           const message = parseRealtimeMessage(event.type, event.data)
-          if (message)
+          if (message) {
             setMessages((current) => appendUniqueMessage(current, message))
+            setFloatingMessages((current) =>
+              appendFloatingMessage(current, message)
+            )
+          }
           return
         }
         if (event.type === "room_muted") {
@@ -244,7 +281,44 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     )
     if (!result.ok) return setNotice(result.message)
     setMessages((value) => appendUniqueMessage(value, result.data))
+    setFloatingMessages((value) => appendFloatingMessage(value, result.data))
     event.currentTarget.reset()
+  }
+
+  async function sendGift(gift: Gift) {
+    if (!joined) return setNotice("进入直播间后才可以赠送礼物。")
+    setSendingGiftId(gift.gift_id)
+    const result = await post<GiftSendResult>(
+      `/api/platform/v1/rooms/${roomId}/gifts`,
+      { gift_id: gift.gift_id, count: 1 },
+      { "Idempotency-Key": crypto.randomUUID() }
+    )
+    setSendingGiftId(null)
+    if (!result.ok) return setNotice(result.message)
+    const message: Message = {
+      message_id: `gift:${result.data.order.order_no}`,
+      nickname: user?.nickname || "我",
+      type: "gift",
+      gift_name: result.data.order.gift_name,
+      count: result.data.order.gift_count,
+    }
+    setMessages((current) => appendUniqueMessage(current, message))
+    setFloatingMessages((current) => appendFloatingMessage(current, message))
+    setBalance((current) =>
+      current === null ? current : current - result.data.order.total_amount
+    )
+    setNotice(`已送出 ${result.data.order.gift_name}。`)
+  }
+
+  async function creditWallet() {
+    setCrediting(true)
+    const result = await post<Wallet>("/api/platform/v1/wallet/dev-credit", {
+      amount: 100000,
+    })
+    setCrediting(false)
+    if (!result.ok) return setNotice(result.message)
+    setBalance(result.data.balance)
+    setNotice("已领取 100,000 测试币。")
   }
 
   async function like() {
@@ -298,6 +372,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     )
 
   const living = room.status === "LIVING"
+  const playing = playback.status === "PUBLISHING" && Boolean(playback.whep_url)
   return (
     <main className="min-h-svh bg-zinc-950 text-white">
       <AppNav />
@@ -336,10 +411,10 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="relative aspect-video overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,.45),transparent_32%),linear-gradient(135deg,#15152b,#09090b)]">
             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.03)_1px,transparent_1px)] bg-[size:30px_30px]" />
-            {playback.status === "PUBLISHING" && playback.whep_url && (
+            {playing && playback.whep_url && (
               <WHEPPlayer url={playback.whep_url} />
             )}
-            {!(playback.status === "PUBLISHING" && playback.whep_url) && (
+            {!playing && (
               <div className="relative grid h-full place-items-center p-8 text-center">
                 <div>
                   <span className="rounded-full bg-red-500 px-3 py-1 text-xs font-bold">
@@ -362,7 +437,32 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
                 </div>
               </div>
             )}
-            <div className="absolute bottom-0 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 z-30 overflow-hidden"
+            >
+              {floatingMessages.map((message) => (
+                <span
+                  className={`live-danmaku absolute left-full rounded-full px-4 py-2 text-sm font-semibold whitespace-nowrap shadow-lg ${message.type === "gift" ? "bg-amber-400/90 text-amber-950" : "bg-black/65 text-white"}`}
+                  key={message.message_id}
+                  onAnimationEnd={() =>
+                    setFloatingMessages((current) =>
+                      current.filter(
+                        (item) => item.message_id !== message.message_id
+                      )
+                    )
+                  }
+                  style={{ top: `${12 + message.lane * 13}%` }}
+                >
+                  {message.type === "gift"
+                    ? `🎁 ${message.nickname} 送出 ${message.gift_name} ×${message.count}`
+                    : `${message.nickname}：${message.content}`}
+                </span>
+              ))}
+            </div>
+            <div
+              className={`pointer-events-none absolute z-20 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300 ${playing ? "bottom-14" : "bottom-0"}`}
+            >
               <span>◉ {metric(stats.viewer_count)} 在线</span>
               <span>♥ {metric(stats.like_count)} 点赞</span>
             </div>
@@ -391,6 +491,45 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
                 <p className="text-sm text-zinc-500">还没有互动消息。</p>
               )}
             </div>
+            <section className="border-t border-white/10 p-4">
+              <div className="flex items-center justify-between text-sm">
+                <strong>赠送礼物</strong>
+                <span className="text-xs text-amber-300">
+                  余额 {balance === null ? "--" : metric(balance)} 币
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {gifts.map((gift) => (
+                  <button
+                    className="rounded-xl border border-white/10 bg-zinc-950 px-2 py-2 text-xs transition hover:border-amber-300/50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={
+                      !joined ||
+                      balance === null ||
+                      balance < gift.price ||
+                      sendingGiftId !== null
+                    }
+                    key={gift.gift_id}
+                    onClick={() => sendGift(gift)}
+                    title={`${gift.name} · ${gift.price} 币`}
+                    type="button"
+                  >
+                    <span className="block text-lg">{giftIcon(gift.name)}</span>
+                    <span className="block truncate">{gift.name}</span>
+                    <span className="text-amber-300">{metric(gift.price)}</span>
+                  </button>
+                ))}
+              </div>
+              {user && (
+                <button
+                  className="mt-3 w-full rounded-lg border border-dashed border-amber-300/30 py-2 text-xs text-amber-200 hover:bg-amber-300/10 disabled:opacity-50"
+                  disabled={crediting}
+                  onClick={creditWallet}
+                  type="button"
+                >
+                  {crediting ? "领取中…" : "领取 100,000 测试币"}
+                </button>
+              )}
+            </section>
             <form
               className="border-t border-white/10 p-4"
               onSubmit={sendDanmaku}
@@ -501,12 +640,15 @@ async function get<T>(url: string): Promise<T | null> {
 }
 async function post<T>(
   url: string,
-  body?: unknown
+  body?: unknown,
+  extraHeaders?: Record<string, string>
 ): Promise<{ ok: true; data: T } | { ok: false; message: string }> {
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: body
+        ? { "content-type": "application/json", ...extraHeaders }
+        : extraHeaders,
       body: body ? JSON.stringify(body) : undefined,
     })
     const data = await response.json().catch(() => ({}))
@@ -566,6 +708,19 @@ function appendUniqueMessage(messages: Message[], message: Message) {
   if (messages.some((item) => item.message_id === message.message_id))
     return messages
   return [...messages.slice(-29), message]
+}
+
+function appendFloatingMessage(messages: FloatingMessage[], message: Message) {
+  if (messages.some((item) => item.message_id === message.message_id))
+    return messages
+  return [...messages.slice(-7), { ...message, lane: messages.length % 5 }]
+}
+
+function giftIcon(name: string) {
+  if (name === "Rose") return "🌹"
+  if (name === "Rocket") return "🚀"
+  if (name === "Castle") return "🏰"
+  return "🎁"
 }
 
 function parseRealtimeEvent(value: unknown) {
