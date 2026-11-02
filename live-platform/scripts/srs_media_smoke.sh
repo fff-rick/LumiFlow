@@ -42,6 +42,43 @@ wait_for_recording() {
   return 1
 }
 
+fetch_hls_playlist() {
+  local url="$1" output="$2" session_playlist="$TMP/hls-session.m3u8" next=""
+  curl -fsS -H "Origin: $BASE_URL" "$url" -o "$session_playlist" || return 1
+  next="$(grep -v '^#' "$session_playlist" | head -n 1)"
+  if [[ "$next" == *hls_ctx=* ]]; then
+    url="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.urljoin(sys.argv[1], sys.argv[2]))' "$url" "$next")"
+    curl -fsS -H "Origin: $BASE_URL" "$url" -o "$output" || return 1
+    return
+  fi
+  cp "$session_playlist" "$output"
+}
+
+wait_for_adaptive_hls() {
+  local master_url="$1" master="$TMP/master.m3u8" variant_url playlist segment
+  for _ in $(seq 1 80); do
+    if fetch_hls_playlist "$master_url" "$master" \
+      && grep -q '720p/index.m3u8' "$master" \
+      && grep -q '360p/index.m3u8' "$master"; then
+      for variant in 720p 360p; do
+        variant_url="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.urljoin(sys.argv[1], sys.argv[2]))' "$master_url" "$variant/index.m3u8")"
+        playlist="$TMP/$variant.m3u8"
+        fetch_hls_playlist "$variant_url" "$playlist" || break
+        segment="$(grep -v '^#' "$playlist" | tail -n 1)"
+        [[ -n "$segment" ]] || break
+        curl -fsS -H "Origin: $BASE_URL" \
+          "$(python3 -c 'import sys,urllib.parse; print(urllib.parse.urljoin(sys.argv[1], sys.argv[2]))' "$variant_url" "$segment")" \
+          -o "$TMP/$variant.ts" || break
+        [[ -s "$TMP/$variant.ts" ]] || break
+      done
+      [[ -s "$TMP/720p.ts" && -s "$TMP/360p.ts" ]] && return 0
+    fi
+    sleep 0.5
+  done
+  echo "adaptive HLS variants were not ready" >&2
+  return 1
+}
+
 [[ -n "$SRS_CONTAINER" ]] || { echo "SRS container is not running" >&2; exit 1; }
 curl -fsS "$BASE_URL" >/dev/null
 curl -fsS "$SRS_API_URL/api/v1/versions" >/dev/null
@@ -61,7 +98,7 @@ docker exec "$SRS_CONTAINER" /usr/local/srs/objs/ffmpeg/bin/ffmpeg \
   -hide_banner -loglevel error -re \
   -f lavfi -i testsrc2=size=640x360:rate=30 \
   -f lavfi -i sine=frequency=1000:sample_rate=48000 \
-  -t 20 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
+  -t 45 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
   -g 30 -c:a aac -ar 48000 -f flv "rtmp://127.0.0.1:1935/live/$STREAM_KEY" \
   >"$TMP/ffmpeg.log" 2>&1 &
 FFMPEG_PID=$!
@@ -71,6 +108,7 @@ echo "[srs] start room and negotiate WHEP"
 curl -fsS -b "$COOKIE" -X POST "$BASE_URL/api/platform/v1/rooms/$ROOM_ID/start" >/dev/null
 PLAYBACK="$(curl -fsS -b "$COOKIE" "$BASE_URL/api/platform/v1/rooms/$ROOM_ID/playback")"
 WHEP_URL="$(printf '%s' "$PLAYBACK" | json_field "'whep_url'")"
+HLS_URL="$(printf '%s' "$PLAYBACK" | json_field "'hls_url'")"
 cat >"$TMP/offer.lf" <<'SDP'
 v=0
 o=- 0 0 IN IP4 127.0.0.1
@@ -116,6 +154,9 @@ if [[ -n "$RESOURCE" ]]; then
   curl -fsS -X DELETE "$RESOURCE" >/dev/null
 fi
 
+echo "[srs] verify 720p/360p adaptive HLS"
+wait_for_adaptive_hls "$HLS_URL"
+
 echo "[srs] stop room and verify disconnect callback"
 STOPPED="$(curl -fsS -b "$COOKIE" -X POST "$BASE_URL/api/platform/v1/rooms/$ROOM_ID/stop")"
 [[ "$(printf '%s' "$STOPPED" | json_field "'status'")" == CLOSED ]]
@@ -128,4 +169,4 @@ curl -fsS "$RECORDING_URL" -o "$TMP/recording.mp4"
 [[ -s "$TMP/recording.mp4" ]]
 head -c 64 "$TMP/recording.mp4" | grep -aq 'ftyp'
 
-echo "SRS media smoke: PASS (room=$ROOM_ID, RTMP, callbacks, WHEP, DVR replay, stop)"
+echo "SRS media smoke: PASS (room=$ROOM_ID, RTMP, callbacks, WHEP, 720p/360p HLS, DVR replay, stop)"

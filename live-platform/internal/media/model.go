@@ -37,6 +37,7 @@ type Playback struct {
 	Provider    string `json:"provider,omitempty"`
 	Status      Status `json:"status,omitempty"`
 	PlaybackURL string `json:"whep_url,omitempty"`
+	HLSURL      string `json:"hls_url,omitempty"`
 }
 
 type Recording struct {
@@ -50,6 +51,7 @@ type Recording struct {
 
 type SRSCallback struct {
 	Action   string `json:"action"`
+	Type     string `json:"type"`
 	ClientID string `json:"client_id"`
 	IP       string `json:"ip"`
 	VHost    string `json:"vhost"`
