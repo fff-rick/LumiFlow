@@ -61,7 +61,12 @@ type InteractionConfig struct {
 }
 type IdentityRoomConfig struct{ HTTPAddr, BaseURL string }
 type QueryConfig struct{ HTTPAddr, BaseURL string }
-type MediaConfig struct{ App, RTMPServerURL, WHEPBaseURL, HLSBaseURL, RecordingBaseURL, CallbackToken string }
+type MediaConfig struct {
+	App, RTMPServerURL, WHEPBaseURL, HLSBaseURL string
+	RecordingBaseURL, RecordingArchiveBaseURL   string
+	CallbackToken                               string
+	RecordingArchiveEnabled                     bool
+}
 type MySQLConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -458,6 +463,14 @@ func Load() (Config, error) {
 	if err != nil || minSampleRate <= 0 || minSampleRate > 1 {
 		return Config{}, fmt.Errorf("DANMAKU_MIN_SAMPLE_RATE must be in (0,1]")
 	}
+	recordingArchiveEnabled, err := strconv.ParseBool(env("MEDIA_RECORDING_ARCHIVE_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("MEDIA_RECORDING_ARCHIVE_ENABLED: %w", err)
+	}
+	recordingArchiveBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("MEDIA_RECORDING_ARCHIVE_BASE_URL")), "/")
+	if recordingArchiveEnabled && recordingArchiveBaseURL == "" {
+		return Config{}, fmt.Errorf("MEDIA_RECORDING_ARCHIVE_BASE_URL is required when recording archive is enabled")
+	}
 
 	var words []string
 	for _, w := range strings.Split(env("DANMAKU_SENSITIVE_WORDS", "spam,banned"), ",") {
@@ -525,12 +538,14 @@ func Load() (Config, error) {
 		Worker:     WorkerConfig{Roles: workerRoles},
 		Projection: ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, MaxStaleness: projectionMaxStaleness},
 		Media: MediaConfig{
-			App:              env("MEDIA_APP", "live"),
-			RTMPServerURL:    strings.TrimRight(env("MEDIA_RTMP_SERVER_URL", "rtmp://localhost:1935/live"), "/"),
-			WHEPBaseURL:      env("MEDIA_WHEP_BASE_URL", "http://localhost:1985/rtc/v1/whep/"),
-			HLSBaseURL:       env("MEDIA_HLS_BASE_URL", "http://localhost:8085/streams/abr"),
-			RecordingBaseURL: env("MEDIA_RECORDING_BASE_URL", "http://localhost:8085/recordings"),
-			CallbackToken:    env("MEDIA_CALLBACK_TOKEN", "dev-media-callback-token-change-me"),
+			App:                     env("MEDIA_APP", "live"),
+			RTMPServerURL:           strings.TrimRight(env("MEDIA_RTMP_SERVER_URL", "rtmp://localhost:1935/live"), "/"),
+			WHEPBaseURL:             env("MEDIA_WHEP_BASE_URL", "http://localhost:1985/rtc/v1/whep/"),
+			HLSBaseURL:              env("MEDIA_HLS_BASE_URL", "http://localhost:8085/streams/abr"),
+			RecordingBaseURL:        env("MEDIA_RECORDING_BASE_URL", "http://localhost:8085/recordings"),
+			RecordingArchiveBaseURL: recordingArchiveBaseURL,
+			RecordingArchiveEnabled: recordingArchiveEnabled,
+			CallbackToken:           env("MEDIA_CALLBACK_TOKEN", "dev-media-callback-token-change-me"),
 		},
 		Observability: observability,
 	}, nil

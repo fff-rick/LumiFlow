@@ -31,7 +31,7 @@ LUMI LIVE 是一个基于 **Go、Centrifugo、Redis、MySQL 和 Kafka** 的直�
   <a href="#压测与可观测性">压测与观测</a>
 </p>
 
-> 本项目以直播**互动平面**为核心，并已接入独立的 SRS 媒体平面：OBS RTMP 推流、浏览器 WHEP 低延迟播放、720p/360p 自适应 HLS，以及断流后生成 MP4 的本地录制回放。HLS 公共地址可切换为 CDN 域名；外部 CDN 和生产级对象存储保持为可替换能力。
+> 本项目以直播**互动平面**为核心，并已接入独立的 SRS 媒体平面：OBS RTMP 推流、浏览器 WHEP 低延迟播放、720p/360p 自适应 HLS，以及断流后生成 MP4 并限速归档到 S3 兼容对象存储。HLS 公共地址可切换为 CDN 域名；本地 MinIO 可替换为 OSS、COS 或 S3。
 
 ## 项目是什么
 
@@ -157,6 +157,7 @@ make compose-up
 | SRS RTMP / WHEP | `rtmp://localhost:1935/live` / [http://localhost:1985/](http://localhost:1985/) | OBS 推流与 WebRTC 信令 |
 | SRS 自适应 HLS | [http://localhost:8085/streams/abr/](http://localhost:8085/streams/abr/) | 本地 720p/360p 自适应播放源 |
 | SRS 录像 | [http://localhost:8085/recordings/](http://localhost:8085/recordings/) | 本地 MP4 回放文件 |
+| MinIO 录像归档 | [http://localhost:9000/lumiflow-recordings/](http://localhost:9000/lumiflow-recordings/) | S3 兼容对象存储回放源站 |
 | Worker 指标 | [http://localhost:19090/](http://localhost:19090/) | Worker 健康检查与指标 |
 | Prometheus | [http://localhost:19091/](http://localhost:19091/) | 指标查询 |
 | Grafana | [http://localhost:3000/](http://localhost:3000/) | 综合监控总览 |
@@ -236,6 +237,10 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | `MEDIA_RTMP_SERVER_URL` / `MEDIA_WHEP_BASE_URL` | 返回给 OBS 和浏览器的公开媒体地址 |
 | `MEDIA_HLS_BASE_URL` | 返回给浏览器的自适应 HLS 公共基地址；本地默认 `http://localhost:8085/streams/abr`，接入 CDN 时配置为对应加速域名 |
 | `MEDIA_RECORDING_BASE_URL` | 返回给浏览器的 SRS MP4 录像公开地址；本地默认 `http://localhost:8085/recordings` |
+| `MEDIA_RECORDING_ARCHIVE_ENABLED` / `MEDIA_RECORDING_ARCHIVE_BASE_URL` | 启用异步对象归档，并配置对象存储或 CDN 的公开回放基地址 |
+| `RECORDING_S3_ENDPOINT` / `RECORDING_S3_ACCESS_KEY` / `RECORDING_S3_SECRET_KEY` | 归档进程使用的 S3 兼容端点与凭证；生产环境通过密钥管理注入 |
+| `RECORDING_S3_BUCKET` / `RECORDING_S3_REGION` / `RECORDING_S3_SECURE` | 目标 Bucket、区域以及是否使用 TLS |
+| `RECORDING_ARCHIVE_BYTES_PER_SECOND` | 单归档进程上传带宽上限；本地默认 `2500000` 字节/秒，约 20 Mbps |
 | `MEDIA_CALLBACK_TOKEN` | SRS 回调媒体控制面的独立内部令牌；生产环境必须替换 |
 | `FLUXFEED_BASE_URL` | 必填；FluxFeed 统一注册、登录、令牌校验与视频内容服务地址，例如 `http://fluxfeed-api:8080` |
 | `INTERNAL_SERVICE_TOKEN` | 网关向 Identity 同步 FluxFeed 用户投影的内部服务令牌；必须与 Identity 服务一致 |
@@ -308,4 +313,4 @@ make record-release ARGS='--service live-api --version v1.2.3 --revision <git-sh
 
 ## 项目边界
 
-本项目已包含 SRS 单节点 RTMP 推流、推流鉴权、状态回调、WHEP 播放、720p/360p HLS 转码和本地持久卷 MP4 录制回放。当前转码器适合本地验证，`MEDIA_HLS_BASE_URL` 可接 CDN 公共域名，但仓库不包含具体 CDN 厂商配置、生产级弹性转码、对象存储与录像生命周期管理、内容审核、真实支付结算或跨地域灾备。扩展这些能力时，应保持媒体平面与互动平面分离，并重新完成目标场景下的安全、容量与故障验证。
+本项目已包含 SRS 单节点 RTMP 推流、推流鉴权、状态回调、WHEP 播放、720p/360p HLS 转码和 S3 兼容 MP4 录像归档。归档进程独立于业务 API，串行上传、限制请求体带宽、校验远端对象大小并持久化重试状态；本地源码构建的 MinIO 仅供开发，生产应使用受维护的 OSS、COS、S3 或自管对象存储。仓库仍不包含具体 CDN 厂商配置、生产级弹性转码、录像生命周期清理、内容审核、真实支付结算或跨地域灾备。

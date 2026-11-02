@@ -151,6 +151,32 @@ func TestDVRCallbackPublishesRecordingURL(t *testing.T) {
 	}
 }
 
+func TestDVRCallbackQueuesArchiveAndUsesArchiveURL(t *testing.T) {
+	store := &fakeStore{session: Session{RoomID: 12, App: "live", StreamName: "room-12", Provider: "srs"}}
+	service := NewService(store, fakeRooms{room.Room{ID: 12}}, Config{
+		App: "live", RecordingBaseURL: "http://localhost:8085/recordings",
+		ArchiveEnabled: true, ArchiveBaseURL: "http://localhost:9000/lumiflow-recordings",
+	})
+	if err := service.HandleSRSCallback(context.Background(), SRSCallback{
+		Action: "on_dvr", App: "live", Stream: "room-12",
+		File: "./objs/nginx/html/recordings/live/room-12.1793520000000.mp4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.recordings[0].StorageStatus; got != RecordingPending {
+		t.Fatalf("storage status=%q", got)
+	}
+	store.recordings[0].StorageStatus = RecordingArchived
+	store.recordings[0].Provider = "s3"
+	items, err := service.Recordings(context.Background(), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := items[0].PlaybackURL; got != "http://localhost:9000/lumiflow-recordings/live/room-12.1793520000000.mp4" {
+		t.Fatalf("playback url=%q", got)
+	}
+}
+
 func TestDVRCallbackRejectsMismatchedFile(t *testing.T) {
 	store := &fakeStore{session: Session{RoomID: 12, Provider: "srs", App: "live", StreamName: "room-12"}}
 	service := NewService(store, fakeRooms{}, Config{App: "live"})

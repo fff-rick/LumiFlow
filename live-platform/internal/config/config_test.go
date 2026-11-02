@@ -42,6 +42,26 @@ func TestMySQLIdleCannotExceedOpen(t *testing.T) {
 	}
 }
 
+func TestRecordingArchiveConfig(t *testing.T) {
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_ENABLED", "true")
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_BASE_URL", "http://localhost:9000/recordings")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Media.RecordingArchiveEnabled || cfg.Media.RecordingArchiveBaseURL != "http://localhost:9000/recordings" {
+		t.Fatalf("media config=%+v", cfg.Media)
+	}
+}
+
+func TestRecordingArchiveRequiresPublicBaseURL(t *testing.T) {
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_ENABLED", "true")
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_BASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected archive base URL validation error")
+	}
+}
+
 func TestWorkerRoleDefaults(t *testing.T) {
 	t.Setenv("WORKER_ROLES", "")
 	cfg, err := Load()

@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
 SRS_API_URL="${SRS_API_URL:-http://127.0.0.1:1985}"
+RECORDING_ARCHIVE_BASE_URL="${RECORDING_ARCHIVE_BASE_URL:-http://localhost:9000/lumiflow-recordings}"
 SRS_CONTAINER="${SRS_CONTAINER:-$(docker ps --filter label=com.docker.compose.service=srs --format '{{.Names}}' | head -n 1)}"
 TMP="$(mktemp -d)"
 COOKIE="$TMP/cookie"
@@ -165,8 +166,9 @@ wait_for_media_status "$ROOM_ID" DISCONNECTED
 
 echo "[srs] verify DVR callback and MP4 replay"
 RECORDING_URL="$(wait_for_recording "$ROOM_ID")"
+[[ "$RECORDING_URL" == "$RECORDING_ARCHIVE_BASE_URL/"* ]]
 curl -fsS "$RECORDING_URL" -o "$TMP/recording.mp4"
 [[ -s "$TMP/recording.mp4" ]]
 head -c 64 "$TMP/recording.mp4" | grep -aq 'ftyp'
 
-echo "SRS media smoke: PASS (room=$ROOM_ID, RTMP, callbacks, WHEP, 720p/360p HLS, DVR replay, stop)"
+echo "SRS media smoke: PASS (room=$ROOM_ID, RTMP, callbacks, WHEP, 720p/360p HLS, S3 archive replay, stop)"
