@@ -37,14 +37,26 @@ type Playback struct {
 	Provider    string `json:"provider,omitempty"`
 	Status      Status `json:"status,omitempty"`
 	PlaybackURL string `json:"whep_url,omitempty"`
+	HLSURL      string `json:"hls_url,omitempty"`
+}
+
+type Recording struct {
+	ID          int64     `json:"recording_id"`
+	RoomID      int64     `json:"room_id"`
+	Provider    string    `json:"provider"`
+	ObjectKey   string    `json:"-"`
+	PlaybackURL string    `json:"playback_url"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type SRSCallback struct {
 	Action   string `json:"action"`
+	Type     string `json:"type"`
 	ClientID string `json:"client_id"`
 	IP       string `json:"ip"`
 	VHost    string `json:"vhost"`
 	App      string `json:"app"`
 	Stream   string `json:"stream"`
 	Param    string `json:"param"`
+	File     string `json:"file"`
 }

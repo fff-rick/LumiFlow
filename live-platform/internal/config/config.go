@@ -61,7 +61,7 @@ type InteractionConfig struct {
 }
 type IdentityRoomConfig struct{ HTTPAddr, BaseURL string }
 type QueryConfig struct{ HTTPAddr, BaseURL string }
-type MediaConfig struct{ App, RTMPServerURL, WHEPBaseURL, CallbackToken string }
+type MediaConfig struct{ App, RTMPServerURL, WHEPBaseURL, HLSBaseURL, RecordingBaseURL, CallbackToken string }
 type MySQLConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -525,10 +525,12 @@ func Load() (Config, error) {
 		Worker:     WorkerConfig{Roles: workerRoles},
 		Projection: ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, MaxStaleness: projectionMaxStaleness},
 		Media: MediaConfig{
-			App:           env("MEDIA_APP", "live"),
-			RTMPServerURL: strings.TrimRight(env("MEDIA_RTMP_SERVER_URL", "rtmp://localhost:1935/live"), "/"),
-			WHEPBaseURL:   env("MEDIA_WHEP_BASE_URL", "http://localhost:1985/rtc/v1/whep/"),
-			CallbackToken: env("MEDIA_CALLBACK_TOKEN", "dev-media-callback-token-change-me"),
+			App:              env("MEDIA_APP", "live"),
+			RTMPServerURL:    strings.TrimRight(env("MEDIA_RTMP_SERVER_URL", "rtmp://localhost:1935/live"), "/"),
+			WHEPBaseURL:      env("MEDIA_WHEP_BASE_URL", "http://localhost:1985/rtc/v1/whep/"),
+			HLSBaseURL:       env("MEDIA_HLS_BASE_URL", "http://localhost:8085/streams/abr"),
+			RecordingBaseURL: env("MEDIA_RECORDING_BASE_URL", "http://localhost:8085/recordings"),
+			CallbackToken:    env("MEDIA_CALLBACK_TOKEN", "dev-media-callback-token-change-me"),
 		},
 		Observability: observability,
 	}, nil

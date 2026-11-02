@@ -1,0 +1,10 @@
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/transcoder ./cmd/transcoder
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-transcoder ./cmd/transcoder
+
+FROM ossrs/srs:8
+COPY --from=build /out/live-transcoder /usr/local/bin/live-transcoder
+ENTRYPOINT ["/usr/local/bin/live-transcoder"]

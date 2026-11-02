@@ -17,6 +17,8 @@ x-app-env: &app-env
   MEDIA_CALLBACK_TOKEN: "${MEDIA_CALLBACK_TOKEN:-dev-media-callback-token-change-me}"
   MEDIA_RTMP_SERVER_URL: "rtmp://localhost:${SRS_RTMP_HOST_PORT:-1935}/live"
   MEDIA_WHEP_BASE_URL: "http://localhost:${SRS_API_HOST_PORT:-1985}/rtc/v1/whep/"
+  MEDIA_HLS_BASE_URL: "${MEDIA_HLS_BASE_URL:-http://localhost:${SRS_HTTP_HOST_PORT:-8085}/streams/abr}"
+  MEDIA_RECORDING_BASE_URL: "http://localhost:${SRS_HTTP_HOST_PORT:-8085}/recordings"
   COMMERCE_HTTP_ADDR: ":8081"
   COMMERCE_BASE_URL: "http://live-commerce:8081"
   INTERACTION_HTTP_ADDR: ":8082"
@@ -276,17 +278,46 @@ services:
       SRS_RTC_SERVER_CANDIDATE: "${SRS_CANDIDATE:-127.0.0.1}"
       SRS_VHOST_RTC_ENABLED: "on"
       SRS_VHOST_RTC_RTMP_TO_RTC: "on"
+      SRS_VHOST_HLS_ENABLED: "on"
+      SRS_VHOST_HLS_HLS_PATH: "./objs/nginx/html/streams/origin"
+      SRS_VHOST_HLS_HLS_FRAGMENT: "1"
+      SRS_VHOST_HLS_HLS_WINDOW: "12"
+      SRS_VHOST_HLS_HLS_M3U8_FILE: "[app]/[stream].m3u8"
+      SRS_VHOST_HLS_HLS_TS_FILE: "[app]/[stream]-[seq].ts"
+      SRS_VHOST_DVR_ENABLED: "on"
+      SRS_VHOST_DVR_DVR_PLAN: "session"
+      SRS_VHOST_DVR_DVR_PATH: "./objs/nginx/html/recordings/[app]/[stream].[timestamp].mp4"
       SRS_VHOST_HTTP_HOOKS_ENABLED: "on"
       SRS_VHOST_HTTP_HOOKS_ON_PUBLISH: "http://live-identity-room:8083/internal/v1/media/srs/callback?token=${MEDIA_CALLBACK_TOKEN:-dev-media-callback-token-change-me}"
       SRS_VHOST_HTTP_HOOKS_ON_UNPUBLISH: "http://live-identity-room:8083/internal/v1/media/srs/callback?token=${MEDIA_CALLBACK_TOKEN:-dev-media-callback-token-change-me}"
       SRS_VHOST_HTTP_HOOKS_ON_PLAY: "http://live-identity-room:8083/internal/v1/media/srs/callback?token=${MEDIA_CALLBACK_TOKEN:-dev-media-callback-token-change-me}"
       SRS_VHOST_HTTP_HOOKS_ON_STOP: "http://live-identity-room:8083/internal/v1/media/srs/callback?token=${MEDIA_CALLBACK_TOKEN:-dev-media-callback-token-change-me}"
+      SRS_VHOST_HTTP_HOOKS_ON_DVR: "http://live-identity-room:8083/internal/v1/media/srs/callback?token=${MEDIA_CALLBACK_TOKEN:-dev-media-callback-token-change-me}"
     ports:
       - "${SRS_RTMP_HOST_PORT:-1935}:1935"
       - "${SRS_API_HOST_PORT:-1985}:1985"
+      - "${SRS_HTTP_HOST_PORT:-8085}:8080"
       - "${SRS_RTC_HOST_PORT:-8000}:8000/udp"
+    volumes:
+      - srs_recordings:/usr/local/srs/objs/nginx/html/recordings
+      - srs_hls:/usr/local/srs/objs/nginx/html/streams
     depends_on:
       live-identity-room: {condition: service_started}
+
+  live-transcoder:
+    build:
+      context: .
+      dockerfile: Dockerfile.transcoder
+    environment:
+      MEDIA_APP: "live"
+      TRANSCODER_SRS_API_URL: "http://srs:1985"
+      TRANSCODER_ORIGIN_URL: "http://srs:8080/streams/origin"
+      TRANSCODER_OUTPUT_DIR: "/data/abr"
+      TRANSCODER_POLL_INTERVAL: "2s"
+    volumes:
+      - srs_hls:/data
+    depends_on:
+      srs: {condition: service_started}
 
   live-migrate:
     build: .
@@ -433,3 +464,5 @@ volumes:
   alertmanager_data:
   prometheus_data:
   grafana_data:
+  srs_recordings:
+  srs_hls:

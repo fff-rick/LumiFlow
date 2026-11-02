@@ -31,7 +31,7 @@ LUMI LIVE 是一个基于 **Go、Centrifugo、Redis、MySQL 和 Kafka** 的直�
   <a href="#压测与可观测性">压测与观测</a>
 </p>
 
-> 本项目以直播**互动平面**为核心，并已接入独立的 SRS 媒体平面第一阶段：OBS RTMP 推流与浏览器 WHEP 播放。转码、CDN 和录制仍保持为后续可替换能力。
+> 本项目以直播**互动平面**为核心，并已接入独立的 SRS 媒体平面：OBS RTMP 推流、浏览器 WHEP 低延迟播放、720p/360p 自适应 HLS，以及断流后生成 MP4 的本地录制回放。HLS 公共地址可切换为 CDN 域名；外部 CDN 和生产级对象存储保持为可替换能力。
 
 ## 项目是什么
 
@@ -50,11 +50,11 @@ LUMI LIVE 是一个基于 **Go、Centrifugo、Redis、MySQL 和 Kafka** 的直�
 
 ## 界面与互动流程
 
-内置 Web UI 由 `live-api` 直接提供，不需要额外启动前端工程；融合模式使用根目录 Next.js 前端。Next.js 直播间已接入 SRS WHEP 播放，并把实时弹幕、在线观众和点赞集中在同一页面。
+内置 Web UI 由 `live-api` 直接提供，不需要额外启动前端工程；融合模式使用根目录 Next.js 前端。Next.js 直播间支持在 SRS WHEP 低延迟播放与 720p/360p 自适应 HLS 之间切换，并把实时弹幕、在线观众和点赞集中在同一页面。
 
 ![LUMI LIVE 直播间界面能力示意](front_con/demo/live-room-preview.svg)
 
-<p align="center"><sub>界面能力示意；融合 Next.js 页面中的媒体区域已接入 SRS WHEP。</sub></p>
+<p align="center"><sub>界面能力示意；融合 Next.js 页面中的媒体区域已接入 SRS WHEP 与自适应 HLS。</sub></p>
 
 实时交互采用四条路径：
 
@@ -155,6 +155,8 @@ make compose-up
 | LUMI LIVE Web / API | [http://localhost:8080/](http://localhost:8080/) | 注册、开播、进房和互动 |
 | Centrifugo | [http://localhost:8000/](http://localhost:8000/) | WebSocket 实时接入 |
 | SRS RTMP / WHEP | `rtmp://localhost:1935/live` / [http://localhost:1985/](http://localhost:1985/) | OBS 推流与 WebRTC 信令 |
+| SRS 自适应 HLS | [http://localhost:8085/streams/abr/](http://localhost:8085/streams/abr/) | 本地 720p/360p 自适应播放源 |
+| SRS 录像 | [http://localhost:8085/recordings/](http://localhost:8085/recordings/) | 本地 MP4 回放文件 |
 | Worker 指标 | [http://localhost:19090/](http://localhost:19090/) | Worker 健康检查与指标 |
 | Prometheus | [http://localhost:19091/](http://localhost:19091/) | 指标查询 |
 | Grafana | [http://localhost:3000/](http://localhost:3000/) | 综合监控总览 |
@@ -205,7 +207,7 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | --- | --- |
 | 注册 / 登录 | `POST /api/v1/auth/register`、`POST /api/v1/auth/login` |
 | 直播间 | `GET/POST /api/v1/rooms`、`POST /api/v1/rooms/{room_id}/start` |
-| 直播媒体 | `POST /api/v1/rooms/{room_id}/media-session`、`GET /api/v1/rooms/{room_id}/playback` |
+| 直播媒体 | `POST /api/v1/rooms/{room_id}/media-session`、`GET /api/v1/rooms/{room_id}/playback`、`GET /api/v1/rooms/{room_id}/recordings` |
 | 进房 / 离房 | `POST /api/v1/rooms/{room_id}/join`、`POST /api/v1/rooms/{room_id}/leave` |
 | 弹幕 / 点赞 / 礼物 | `POST /api/v1/rooms/{room_id}/danmaku`、`like`、`gifts` |
 | 实时令牌 | `POST /api/v1/realtime/token` |
@@ -232,6 +234,8 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | `AUTH_JWT_SECRET` | 应用 JWT 密钥 |
 | `SRS_CANDIDATE` | SRS 写入 WebRTC SDP 的宿主机可达 IP；仅本机访问时默认 `127.0.0.1` |
 | `MEDIA_RTMP_SERVER_URL` / `MEDIA_WHEP_BASE_URL` | 返回给 OBS 和浏览器的公开媒体地址 |
+| `MEDIA_HLS_BASE_URL` | 返回给浏览器的自适应 HLS 公共基地址；本地默认 `http://localhost:8085/streams/abr`，接入 CDN 时配置为对应加速域名 |
+| `MEDIA_RECORDING_BASE_URL` | 返回给浏览器的 SRS MP4 录像公开地址；本地默认 `http://localhost:8085/recordings` |
 | `MEDIA_CALLBACK_TOKEN` | SRS 回调媒体控制面的独立内部令牌；生产环境必须替换 |
 | `FLUXFEED_BASE_URL` | 必填；FluxFeed 统一注册、登录、令牌校验与视频内容服务地址，例如 `http://fluxfeed-api:8080` |
 | `INTERNAL_SERVICE_TOKEN` | 网关向 Identity 同步 FluxFeed 用户投影的内部服务令牌；必须与 Identity 服务一致 |
@@ -304,4 +308,4 @@ make record-release ARGS='--service live-api --version v1.2.3 --revision <git-sh
 
 ## 项目边界
 
-本项目已包含 SRS 单节点 RTMP 推流、推流鉴权、状态回调和 WHEP 播放，但不包含生产级转码、CDN、录制、内容审核、真实支付结算或跨地域灾备。扩展这些能力时，应保持媒体平面与互动平面分离，并重新完成目标场景下的安全、容量与故障验证。
+本项目已包含 SRS 单节点 RTMP 推流、推流鉴权、状态回调、WHEP 播放、720p/360p HLS 转码和本地持久卷 MP4 录制回放。当前转码器适合本地验证，`MEDIA_HLS_BASE_URL` 可接 CDN 公共域名，但仓库不包含具体 CDN 厂商配置、生产级弹性转码、对象存储与录像生命周期管理、内容审核、真实支付结算或跨地域灾备。扩展这些能力时，应保持媒体平面与互动平面分离，并重新完成目标场景下的安全、容量与故障验证。

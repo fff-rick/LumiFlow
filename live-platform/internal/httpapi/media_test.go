@@ -20,6 +20,9 @@ func (*fakeMedia) IssueCredentials(context.Context, int64, int64) (media.Credent
 func (*fakeMedia) Playback(context.Context, int64) (media.Playback, error) {
 	return media.Playback{}, nil
 }
+func (*fakeMedia) Recordings(context.Context, int64) ([]media.Recording, error) {
+	return nil, nil
+}
 func (*fakeMedia) RequirePublishing(context.Context, int64) error { return nil }
 func (f *fakeMedia) HandleSRSCallback(context.Context, media.SRSCallback) error {
 	f.callbacks++

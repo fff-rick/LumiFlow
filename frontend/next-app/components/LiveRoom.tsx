@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { FormEvent, useEffect, useState } from "react"
 import { Centrifuge } from "centrifuge"
 import AppNav from "@/components/AppNav"
+import HLSPlayer from "@/components/HLSPlayer"
 import { useSession } from "@/components/SessionProvider"
 import WHEPPlayer from "@/components/WHEPPlayer"
 
@@ -47,10 +48,16 @@ type MediaPlayback = {
   provider?: string
   status?: string
   whep_url?: string
+  hls_url?: string
 }
 type MediaCredentials = MediaPlayback & {
   server_url: string
   stream_key: string
+}
+type Recording = {
+  recording_id: number
+  playback_url: string
+  created_at: string
 }
 
 export default function LiveRoom({ roomId }: { roomId: string }) {
@@ -73,6 +80,13 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
   )
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("offline")
   const [playback, setPlayback] = useState<MediaPlayback>({})
+  const [livePlaybackMode, setLivePlaybackMode] = useState<
+    "latency" | "adaptive"
+  >("latency")
+  const [recordings, setRecordings] = useState<Recording[]>([])
+  const [selectedRecordingId, setSelectedRecordingId] = useState<number | null>(
+    null
+  )
   const [credentials, setCredentials] = useState<MediaCredentials | null>(null)
   const [notice, setNotice] = useState("")
 
@@ -119,9 +133,12 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
   useEffect(() => {
     let active = true
     async function refresh() {
-      const [nextPlayback, nextRoom] = await Promise.all([
+      const [nextPlayback, nextRoom, nextRecordings] = await Promise.all([
         get<MediaPlayback>(`/api/platform/v1/rooms/${roomId}/playback`),
         get<Room>(`/api/platform/v1/rooms/${roomId}`),
+        get<{ items?: Recording[] }>(
+          `/api/platform/v1/rooms/${roomId}/recordings`
+        ),
       ])
       if (!active) return
       if (nextPlayback) setPlayback(nextPlayback)
@@ -129,6 +146,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         setRoom((current) =>
           current?.status === "CLOSED" ? current : nextRoom
         )
+      if (nextRecordings) setRecordings(nextRecordings.items ?? [])
     }
     void refresh()
     const timer = window.setInterval(refresh, 3000)
@@ -372,7 +390,12 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
     )
 
   const living = room.status === "LIVING"
+  const closed = room.status === "CLOSED"
   const playing = playback.status === "PUBLISHING" && Boolean(playback.whep_url)
+  const selectedRecording =
+    recordings.find((item) => item.recording_id === selectedRecordingId) ??
+    recordings[0]
+  const replaying = closed && Boolean(selectedRecording?.playback_url)
   return (
     <main className="min-h-svh bg-zinc-950 text-white">
       <AppNav />
@@ -400,7 +423,13 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
             onClick={join}
             type="button"
           >
-            {joined ? "已进入直播间" : living ? "进入直播间" : "直播已结束"}
+            {joined
+              ? "已进入直播间"
+              : living
+                ? "进入直播间"
+                : closed
+                  ? "直播已结束"
+                  : "等待开播"}
           </button>
         </div>
         {notice && (
@@ -411,18 +440,51 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="relative aspect-video overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,.45),transparent_32%),linear-gradient(135deg,#15152b,#09090b)]">
             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.03)_1px,transparent_1px)] bg-[size:30px_30px]" />
-            {playing && playback.whep_url && (
+            {playing && playback.whep_url && livePlaybackMode === "latency" && (
               <WHEPPlayer url={playback.whep_url} />
             )}
-            {!playing && (
+            {playing && playback.hls_url && livePlaybackMode === "adaptive" && (
+              <HLSPlayer url={playback.hls_url} />
+            )}
+            {playing && playback.hls_url && (
+              <div className="absolute top-4 right-4 z-40 flex rounded-xl border border-white/15 bg-black/70 p-1 text-xs backdrop-blur">
+                <button
+                  className={`rounded-lg px-3 py-2 font-semibold ${livePlaybackMode === "latency" ? "bg-violet-500 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+                  onClick={() => setLivePlaybackMode("latency")}
+                  type="button"
+                >
+                  低延迟
+                </button>
+                <button
+                  className={`rounded-lg px-3 py-2 font-semibold ${livePlaybackMode === "adaptive" ? "bg-violet-500 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+                  onClick={() => setLivePlaybackMode("adaptive")}
+                  type="button"
+                >
+                  自适应
+                </button>
+              </div>
+            )}
+            {replaying && selectedRecording && (
+              <video
+                className="relative z-10 h-full w-full bg-black object-contain"
+                controls
+                key={selectedRecording.recording_id}
+                playsInline
+                preload="metadata"
+                src={selectedRecording.playback_url}
+              />
+            )}
+            {!playing && !replaying && (
               <div className="relative grid h-full place-items-center p-8 text-center">
                 <div>
                   <span className="rounded-full bg-red-500 px-3 py-1 text-xs font-bold">
                     {living ? "LIVE" : room.status}
                   </span>
                   <h2 className="mt-5 text-xl font-bold">
-                    {!living
-                      ? "直播已结束"
+                    {closed
+                      ? recordings.length
+                        ? "正在加载直播回放"
+                        : "直播已结束，录像生成后会显示在这里"
                       : playback.status === "PUBLISHING"
                         ? "推流已就绪，等待开播"
                         : playback.status === "DISCONNECTED"
@@ -461,7 +523,7 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
               ))}
             </div>
             <div
-              className={`pointer-events-none absolute z-20 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300 ${playing ? "bottom-14" : "bottom-0"}`}
+              className={`pointer-events-none absolute z-20 flex w-full justify-between border-t border-white/10 bg-black/30 px-5 py-3 text-sm text-zinc-300 ${playing || replaying ? "bottom-14" : "bottom-0"}`}
             >
               <span>◉ {metric(stats.viewer_count)} 在线</span>
               <span>♥ {metric(stats.like_count)} 点赞</span>
@@ -554,6 +616,26 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
             </form>
           </aside>
         </div>
+        {closed && recordings.length > 0 && (
+          <section className="mt-5 rounded-3xl border border-white/10 bg-zinc-900 p-5">
+            <h2 className="font-bold">本场直播回放</h2>
+            <p className="mt-1 text-sm text-zinc-400">
+              断流重连会生成多个录像片段，可在这里切换播放。
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {recordings.map((recording, index) => (
+                <button
+                  className={`rounded-xl border px-4 py-2 text-sm transition ${selectedRecording?.recording_id === recording.recording_id ? "border-violet-400 bg-violet-400/15 text-violet-100" : "border-white/15 text-zinc-300 hover:bg-white/10"}`}
+                  key={recording.recording_id}
+                  onClick={() => setSelectedRecordingId(recording.recording_id)}
+                  type="button"
+                >
+                  录像片段 {recordings.length - index} · {recordingTime(recording.created_at)}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
         {user?.id === room.anchor_id && room.status !== "CLOSED" && (
           <section className="mt-5 rounded-3xl border border-white/10 bg-zinc-900 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -667,6 +749,13 @@ function metric(value: number) {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(Number(value) || 0)
+}
+
+function recordingTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? "时间未知"
+    : date.toLocaleString("zh-CN", { hour12: false })
 }
 
 async function realtimeToken() {
