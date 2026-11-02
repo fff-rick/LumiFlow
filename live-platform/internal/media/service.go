@@ -41,6 +41,7 @@ type Config struct {
 	App              string
 	RTMPServerURL    string
 	WHEPBaseURL      string
+	HLSBaseURL       string
 	RecordingBaseURL string
 }
 
@@ -54,6 +55,7 @@ func NewService(store Store, rooms RoomReader, cfg Config) *Service {
 	cfg.App = strings.TrimSpace(cfg.App)
 	cfg.RTMPServerURL = strings.TrimRight(strings.TrimSpace(cfg.RTMPServerURL), "/")
 	cfg.WHEPBaseURL = strings.TrimSpace(cfg.WHEPBaseURL)
+	cfg.HLSBaseURL = strings.TrimRight(strings.TrimSpace(cfg.HLSBaseURL), "/")
 	cfg.RecordingBaseURL = strings.TrimRight(strings.TrimSpace(cfg.RecordingBaseURL), "/")
 	return &Service{store: store, rooms: rooms, config: cfg}
 }
@@ -112,8 +114,16 @@ func (s *Service) Playback(ctx context.Context, roomID int64) (Playback, error) 
 	}
 	if v.Status == room.StatusLiving && session.Status == StatusPublishing {
 		playback.PlaybackURL = s.playbackURL(session.StreamName)
+		playback.HLSURL = s.adaptiveURL(session.StreamName)
 	}
 	return playback, nil
+}
+
+func (s *Service) adaptiveURL(streamName string) string {
+	if s.config.HLSBaseURL == "" {
+		return ""
+	}
+	return s.config.HLSBaseURL + "/" + url.PathEscape(s.config.App) + "/" + url.PathEscape(streamName) + "/master.m3u8"
 }
 
 func (s *Service) Recordings(ctx context.Context, roomID int64) ([]Recording, error) {
@@ -146,10 +156,14 @@ func (s *Service) RequirePublishing(ctx context.Context, roomID int64) error {
 }
 
 func (s *Service) HandleSRSCallback(ctx context.Context, callback SRSCallback) error {
-	if callback.App != s.config.App || strings.TrimSpace(callback.Stream) == "" {
+	if strings.TrimSpace(callback.Stream) == "" {
 		return ErrInvalidCallback
 	}
-	session, err := s.store.ByStream(ctx, callback.App, callback.Stream)
+	app, streamName, err := s.callbackStream(callback)
+	if err != nil {
+		return err
+	}
+	session, err := s.store.ByStream(ctx, app, streamName)
 	if err != nil {
 		return err
 	}
@@ -189,6 +203,23 @@ func (s *Service) HandleSRSCallback(ctx context.Context, callback SRSCallback) e
 	default:
 		return fmt.Errorf("%w: unsupported action %q", ErrInvalidCallback, callback.Action)
 	}
+}
+
+func (s *Service) callbackStream(callback SRSCallback) (string, string, error) {
+	if callback.App == s.config.App {
+		return callback.App, callback.Stream, nil
+	}
+	if callback.Action != "on_play" || callback.Type != "hls-play" {
+		return "", "", ErrInvalidCallback
+	}
+	parts := strings.Split(strings.Trim(callback.App, "/"), "/")
+	if len(parts) == 3 && parts[0] == "streams" && parts[1] == "origin" && parts[2] == s.config.App {
+		return s.config.App, callback.Stream, nil
+	}
+	if len(parts) >= 4 && parts[0] == "streams" && parts[1] == "abr" && parts[2] == s.config.App {
+		return s.config.App, parts[3], nil
+	}
+	return "", "", ErrInvalidCallback
 }
 
 func recordingObjectKey(callback SRSCallback) (string, error) {

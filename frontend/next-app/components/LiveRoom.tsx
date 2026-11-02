@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { FormEvent, useEffect, useState } from "react"
 import { Centrifuge } from "centrifuge"
 import AppNav from "@/components/AppNav"
+import HLSPlayer from "@/components/HLSPlayer"
 import { useSession } from "@/components/SessionProvider"
 import WHEPPlayer from "@/components/WHEPPlayer"
 
@@ -47,6 +48,7 @@ type MediaPlayback = {
   provider?: string
   status?: string
   whep_url?: string
+  hls_url?: string
 }
 type MediaCredentials = MediaPlayback & {
   server_url: string
@@ -78,6 +80,9 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
   )
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("offline")
   const [playback, setPlayback] = useState<MediaPlayback>({})
+  const [livePlaybackMode, setLivePlaybackMode] = useState<
+    "latency" | "adaptive"
+  >("latency")
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [selectedRecordingId, setSelectedRecordingId] = useState<number | null>(
     null
@@ -435,8 +440,29 @@ export default function LiveRoom({ roomId }: { roomId: string }) {
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="relative aspect-video overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_50%_35%,rgba(139,92,246,.45),transparent_32%),linear-gradient(135deg,#15152b,#09090b)]">
             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.03)_1px,transparent_1px)] bg-[size:30px_30px]" />
-            {playing && playback.whep_url && (
+            {playing && playback.whep_url && livePlaybackMode === "latency" && (
               <WHEPPlayer url={playback.whep_url} />
+            )}
+            {playing && playback.hls_url && livePlaybackMode === "adaptive" && (
+              <HLSPlayer url={playback.hls_url} />
+            )}
+            {playing && playback.hls_url && (
+              <div className="absolute top-4 right-4 z-40 flex rounded-xl border border-white/15 bg-black/70 p-1 text-xs backdrop-blur">
+                <button
+                  className={`rounded-lg px-3 py-2 font-semibold ${livePlaybackMode === "latency" ? "bg-violet-500 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+                  onClick={() => setLivePlaybackMode("latency")}
+                  type="button"
+                >
+                  低延迟
+                </button>
+                <button
+                  className={`rounded-lg px-3 py-2 font-semibold ${livePlaybackMode === "adaptive" ? "bg-violet-500 text-white" : "text-zinc-300 hover:bg-white/10"}`}
+                  onClick={() => setLivePlaybackMode("adaptive")}
+                  type="button"
+                >
+                  自适应
+                </button>
+              </div>
             )}
             {replaying && selectedRecording && (
               <video
