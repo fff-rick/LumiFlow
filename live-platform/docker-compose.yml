@@ -19,6 +19,8 @@ x-app-env: &app-env
   MEDIA_WHEP_BASE_URL: "http://localhost:${SRS_API_HOST_PORT:-1985}/rtc/v1/whep/"
   MEDIA_HLS_BASE_URL: "${MEDIA_HLS_BASE_URL:-http://localhost:${SRS_HTTP_HOST_PORT:-8085}/streams/abr}"
   MEDIA_RECORDING_BASE_URL: "http://localhost:${SRS_HTTP_HOST_PORT:-8085}/recordings"
+  MEDIA_RECORDING_ARCHIVE_ENABLED: "${MEDIA_RECORDING_ARCHIVE_ENABLED:-true}"
+  MEDIA_RECORDING_ARCHIVE_BASE_URL: "${MEDIA_RECORDING_ARCHIVE_BASE_URL:-http://localhost:${MINIO_API_HOST_PORT:-9000}/lumiflow-recordings}"
   COMMERCE_HTTP_ADDR: ":8081"
   COMMERCE_BASE_URL: "http://live-commerce:8081"
   INTERACTION_HTTP_ADDR: ":8082"
@@ -319,6 +321,47 @@ services:
     depends_on:
       srs: {condition: service_started}
 
+  minio:
+    build:
+      context: .
+      dockerfile: Dockerfile.minio
+    image: lumiflow-minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-lumiflow-minio}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-lumiflow-minio-password}"
+    ports:
+      - "127.0.0.1:${MINIO_API_HOST_PORT:-9000}:9000"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  live-recording-archiver:
+    build: .
+    command: ["live-recording-archiver"]
+    environment:
+      ROOM_MYSQL_DSN: "live_room_app:room-app@tcp(mysql:3306)/room?parseTime=true&charset=utf8mb4"
+      RECORDING_S3_ENDPOINT: "minio:9000"
+      RECORDING_S3_ACCESS_KEY: "${MINIO_ROOT_USER:-lumiflow-minio}"
+      RECORDING_S3_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-lumiflow-minio-password}"
+      RECORDING_S3_BUCKET: "lumiflow-recordings"
+      RECORDING_S3_REGION: "us-east-1"
+      RECORDING_S3_SECURE: "false"
+      RECORDING_S3_PUBLIC_READ: "true"
+      RECORDING_ARCHIVE_DIR: "/recordings"
+      RECORDING_ARCHIVE_BYTES_PER_SECOND: "${RECORDING_ARCHIVE_BYTES_PER_SECOND:-2500000}"
+      RECORDING_ARCHIVE_POLL_INTERVAL: "2s"
+      RECORDING_ARCHIVE_LEASE: "10m"
+    volumes:
+      - srs_recordings:/recordings:ro
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      minio: {condition: service_healthy}
+
   live-migrate:
     build: .
     command: ["live-migrate"]
@@ -466,3 +509,4 @@ volumes:
   grafana_data:
   srs_recordings:
   srs_hls:
+  minio_data:

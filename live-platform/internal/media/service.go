@@ -43,6 +43,8 @@ type Config struct {
 	WHEPBaseURL      string
 	HLSBaseURL       string
 	RecordingBaseURL string
+	ArchiveBaseURL   string
+	ArchiveEnabled   bool
 }
 
 type Service struct {
@@ -57,6 +59,7 @@ func NewService(store Store, rooms RoomReader, cfg Config) *Service {
 	cfg.WHEPBaseURL = strings.TrimSpace(cfg.WHEPBaseURL)
 	cfg.HLSBaseURL = strings.TrimRight(strings.TrimSpace(cfg.HLSBaseURL), "/")
 	cfg.RecordingBaseURL = strings.TrimRight(strings.TrimSpace(cfg.RecordingBaseURL), "/")
+	cfg.ArchiveBaseURL = strings.TrimRight(strings.TrimSpace(cfg.ArchiveBaseURL), "/")
 	return &Service{store: store, rooms: rooms, config: cfg}
 }
 
@@ -135,7 +138,11 @@ func (s *Service) Recordings(ctx context.Context, roomID int64) ([]Recording, er
 		return nil, err
 	}
 	for i := range items {
-		items[i].PlaybackURL = s.recordingURL(items[i].ObjectKey)
+		baseURL := s.config.RecordingBaseURL
+		if items[i].StorageStatus == RecordingArchived {
+			baseURL = s.config.ArchiveBaseURL
+		}
+		items[i].PlaybackURL = recordingURL(baseURL, items[i].ObjectKey)
 	}
 	return items, nil
 }
@@ -196,8 +203,13 @@ func (s *Service) HandleSRSCallback(ctx context.Context, callback SRSCallback) e
 		if err != nil {
 			return err
 		}
+		storageStatus := RecordingLocal
+		if s.config.ArchiveEnabled {
+			storageStatus = RecordingPending
+		}
 		_, err = s.store.SaveRecording(ctx, Recording{
 			RoomID: session.RoomID, Provider: session.Provider, ObjectKey: objectKey,
+			StorageStatus: storageStatus,
 		})
 		return err
 	default:
@@ -233,15 +245,15 @@ func recordingObjectKey(callback SRSCallback) (string, error) {
 	return path.Join(callback.App, name), nil
 }
 
-func (s *Service) recordingURL(objectKey string) string {
-	if s.config.RecordingBaseURL == "" {
+func recordingURL(baseURL, objectKey string) string {
+	if baseURL == "" {
 		return ""
 	}
 	parts := strings.Split(objectKey, "/")
 	for i := range parts {
 		parts[i] = url.PathEscape(parts[i])
 	}
-	return s.config.RecordingBaseURL + "/" + strings.Join(parts, "/")
+	return baseURL + "/" + strings.Join(parts, "/")
 }
 
 func (s *Service) playbackURL(streamName string) string {
