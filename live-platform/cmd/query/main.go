@@ -13,11 +13,9 @@ import (
 	"github.com/example/live-platform/internal/config"
 	"github.com/example/live-platform/internal/httpapi"
 	"github.com/example/live-platform/internal/observability"
-	"github.com/example/live-platform/internal/querymodel"
 	"github.com/example/live-platform/internal/stats"
 	"github.com/example/live-platform/internal/store/mysqlstore"
 	"github.com/example/live-platform/internal/store/redisstore"
-	"github.com/example/live-platform/internal/viewer"
 )
 
 func main() {
@@ -63,8 +61,7 @@ func main() {
 
 	query := httpapi.NewQuery(httpapi.Deps{
 		Log: log, MySQL: db, History: db, Redis: redis, Metrics: metrics,
-		Profiles: querymodel.NewRepository(db),
-		Viewers:  viewer.NewService(redis, cfg.Engagement.ViewerTTL), Stats: stats.NewService(stats.NewRedisStore(redis)),
+		Stats: stats.NewService(stats.NewRedisStore(redis)),
 	})
 	srv := &http.Server{Addr: cfg.Query.HTTPAddr, Handler: query, ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)

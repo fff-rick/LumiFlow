@@ -154,8 +154,12 @@ Interaction 与 Commerce 的 Redis 投影。`PROJECTION_MODE=shadow` 默认保�
 `COMMERCE_PROJECTION_MODE` 分别灰度。显式切为 `prefer` 后才采用投影优先、缺失或
 超过 5 分钟时通过带服务认证的内部 HTTP 兜底并 fail closed。权威 API 不返回聚合
 版本，因此兜底结果不会反写版本化投影，避免迟到事件造成状态回退。读命中/陈旧、回源、影子差异、投影年龄、乱序丢弃、
-Kafka lag 和 fail-closed 均已有指标。尚未完成权威数据全量快照重建命令、切流观测和
+Kafka lag 和 fail-closed 均已有指标。尚未完成重建后的切流观测和
 Room/Identity 停机 5 分钟故障演练，因此 P3 暂不标记完成。
+
+`make projection-rebuild` 已提供可重复的全量重投命令：它在权威 schema 的串行化事务中
+分页读取 Identity、Room 和 Governance 状态，写入原有 Outbox，再由现有 Kafka
+Consumer 追平两个 Redis namespace。P3 仍需完成重建后的 lag/数量验收和 5 分钟故障演练。
 
 2026-10-25 本地切流验证已完成一轮：shadow 压测未出现 mismatch/error，两个投影
 consumer group 的 lag 均归零；Commerce 单服务切到 `prefer` 后，在 IdentityRoom
@@ -205,6 +209,18 @@ consumer group 的 lag 均归零；Commerce 单服务切到 `prefer` 后，在 I
 
 ## 阶段 P4：拆分 `live-identity-room`
 
+**实施状态：进行中（2026-11-06）**
+
+功能拆分已经落地：`cmd/identity` 只打开 Identity schema，`cmd/room` 只打开 Room
+schema；Gateway 已按 `IDENTITY_BASE_URL` 与 `ROOM_BASE_URL` 分路由，Interaction、
+Commerce、FluxFeed 身份同步和 SRS 回调也已改用各自所有者。Room 通过独立 consumer
+group 维护自己的 Identity Redis 投影，缺失或过期时才调用带服务认证的 Identity
+内部 API。旧 `cmd/identityroom` 保留为回滚制品，不再承接默认流量。
+
+P4 功能代码已完成；由于发布观察、独立故障验证和生产切流验收按当前安排后置，本阶段
+仍标记为进行中。单用户 HTTP fallback 已满足正确性，批量 fallback 留到实际 miss
+规模证明有必要时再增加。
+
 ### 目标
 
 把安全敏感的账户认证和房间控制面分成独立故障域。
@@ -231,6 +247,8 @@ consumer group 的 lag 均归零；Commerce 单服务切到 `prefer` 后，在 I
 
 ## 阶段 P5：从 Interaction 拆出 Presence
 
+状态：功能拆分已完成；生产切流、容量和故障演练待执行。
+
 ### 目标
 
 让高频心跳/在线状态和弹幕/点赞分别扩缩容，避免 Redis 热点与连接流量互相抢占资源。
@@ -241,7 +259,7 @@ consumer group 的 lag 均归零；Commerce 单服务切到 `prefer` 后，在 I
 2. 将 Viewer Redis Key 从 `live:room:*` 迁移到 `live:presence:*`。
 3. Interaction 只保留 danmaku、like 和热点保护，读取 Presence 聚合后的 viewer count 投影，不读取 Presence 原始 ZSET。
 4. Presence 消费 Gift 事件更新在线礼物榜；Commerce 不写 Presence Redis。
-5. Presence 发布聚合 viewer-count 事件，Query/统计投影消费。
+5. 当前由 Presence 单写聚合 viewer-count Key，Interaction/Query 只读该聚合；Redis 物理隔离前再升级为事件投影，避免为同集群增加无收益的事件链路。
 6. 订阅 JWT 由 Presence 签发或通过受限 token signer，避免所有业务服务共享 Centrifugo 主密钥。
 
 ### Redis Key 迁移

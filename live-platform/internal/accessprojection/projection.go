@@ -16,6 +16,8 @@ import (
 const (
 	NamespaceInteraction = "interaction"
 	NamespaceCommerce    = "commerce"
+	NamespacePresence    = "presence"
+	NamespaceRoom        = "room"
 )
 
 type Topics struct {
@@ -53,7 +55,7 @@ func (h *Handler) Handle(ctx context.Context, record mq.Record) error {
 	if err := json.Unmarshal(record.Value, &event); err != nil {
 		return mq.Permanent(fmt.Errorf("decode access projection: %w", err))
 	}
-	if event.EventID == "" || event.Version != 1 || event.Producer != projectionevent.Producer || event.AggregateVersion <= 0 || event.CreatedAt.IsZero() || len(event.Payload) == 0 {
+	if event.EventID == "" || event.Version != 1 || !projectionevent.ValidProducer(event.AggregateType, event.Producer) || event.AggregateVersion <= 0 || event.CreatedAt.IsZero() || len(event.Payload) == 0 {
 		return mq.Permanent(errors.New("invalid access projection envelope"))
 	}
 	key, err := h.key(record.Topic, event)

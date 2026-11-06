@@ -130,38 +130,84 @@ func (s *Server) handler(service string) http.Handler {
 // intentionally preserves the public v1 contract, allowing live-api to route
 // traffic by configuration without client changes or dual writes.
 func NewInteraction(d Deps) http.Handler {
-	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, danmaku: d.Danmaku, likes: d.Likes, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
+	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, rooms: d.Rooms, danmaku: d.Danmaku, likes: d.Likes, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /ready", s.ready)
 	if s.metrics != nil {
 		s.mux.Handle("GET /metrics", s.metrics.Handler())
 	}
-	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/join", s.requireAuth(s.joinRoom))
-	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/leave", s.requireAuth(s.leaveRoom))
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/danmaku", s.requireAuth(s.sendDanmaku))
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/like", s.requireAuth(s.likeRoom))
-	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/heartbeat", s.requireAuth(s.heartbeatRoom))
 	return s.handler("live-interaction")
 }
 
-// NewIdentityRoom is the Stage 4 owner for identity, room lifecycle and
-// governance. The gateway forwards the existing v1 contract unchanged.
-func NewIdentityRoom(d Deps) http.Handler {
+func NewPresence(d Deps) http.Handler {
+	s := &Server{log: d.Log, redis: d.Redis, metrics: d.Metrics, profiles: d.Profiles, appTokens: d.AppTokens, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /health", s.health)
+	s.mux.HandleFunc("GET /ready", s.ready)
+	if s.metrics != nil {
+		s.mux.Handle("GET /metrics", s.metrics.Handler())
+	}
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/join", s.requireAuth(s.joinPresence))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/leave", s.requireAuth(s.leaveRoom))
+	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/heartbeat", s.requireAuth(s.heartbeatRoom))
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/top-viewers", s.topViewers)
+	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/viewers", s.roomViewers)
+	return s.handler("live-presence")
+}
+
+func newControlServer(d Deps) *Server {
 	s := &Server{log: d.Log, mysql: d.MySQL, redis: d.Redis, centrifugo: d.Centrifugo, governance: d.Governance, metrics: d.Metrics, auth: d.Auth, appTokens: d.AppTokens, internalToken: d.InternalToken, mediaCallbackToken: d.MediaCallbackToken, cfTokens: d.CFTokens, cfSubTTL: d.CFSubTTL, rooms: d.Rooms, media: d.Media, stats: d.Stats, mux: http.NewServeMux()}
 	if s.governance == nil {
 		if governance, ok := d.Redis.(GovernanceStore); ok {
 			s.governance = governance
 		}
 	}
+	return s
+}
+
+func (s *Server) mountControlRoutes() {
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /ready", s.ready)
 	if s.metrics != nil {
 		s.mux.Handle("GET /metrics", s.metrics.Handler())
 	}
+}
+
+func (s *Server) mountIdentityRoutes() {
 	s.mux.HandleFunc("POST /api/v1/auth/register", s.register)
 	s.mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	s.mux.HandleFunc("GET /api/v1/me", s.requireAuth(s.me))
 	s.mux.HandleFunc("POST /api/v1/realtime/token", s.requireAuth(s.realtimeToken))
+	s.mux.HandleFunc("POST /internal/v1/users/fluxfeed-sync", s.requireInternal(s.syncFluxFeedUser))
+	s.mux.HandleFunc("GET /internal/v1/users/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := pathInt64(w, r, "user_id")
+		if !ok {
+			return
+		}
+		u, err := s.auth.User(r.Context(), userID)
+		if err != nil {
+			if errors.Is(err, auth.ErrUserNotFound) {
+				writeError(w, http.StatusNotFound, "USER_NOT_FOUND", "user not found")
+				return
+			}
+			s.log.Error("read internal user", "error", err, "user_id", userID)
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to read user")
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			ID        int64     `json:"id"`
+			Account   string    `json:"account"`
+			Username  string    `json:"username"`
+			Nickname  string    `json:"nickname"`
+			Avatar    string    `json:"avatar"`
+			Status    int       `json:"status"`
+			CreatedAt time.Time `json:"created_at"`
+		}{u.ID, u.Account, u.Username, u.Nickname, u.Avatar, u.Status, u.CreatedAt})
+	}))
+}
+
+func (s *Server) mountRoomRoutes() {
 	s.mux.HandleFunc("POST /api/v1/rooms", s.requireAuth(s.createRoom))
 	s.mux.HandleFunc("GET /api/v1/rooms", s.listRooms)
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}", s.getRoom)
@@ -176,7 +222,6 @@ func NewIdentityRoom(d Deps) http.Handler {
 	s.mux.HandleFunc("POST /api/v1/rooms/{room_id}/bans", s.requireAuth(s.banUser))
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/bans", s.requireAuth(s.listBans))
 	s.mux.HandleFunc("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.requireAuth(s.unbanUser))
-	s.mux.HandleFunc("POST /internal/v1/users/fluxfeed-sync", s.requireInternal(s.syncFluxFeedUser))
 	s.mux.HandleFunc("POST /internal/v1/media/srs/callback", s.srsCallback)
 	// Internal, versioned read contract for the interaction migration. It is not
 	// exposed by the public gateway Service.
@@ -197,26 +242,6 @@ func NewIdentityRoom(d Deps) http.Handler {
 		writeJSON(w, http.StatusOK, access)
 	}))
 	s.mux.HandleFunc("GET /internal/v1/rooms/{room_id}", s.requireInternal(s.getRoom))
-	s.mux.HandleFunc("GET /internal/v1/users/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := pathInt64(w, r, "user_id")
-		if !ok {
-			return
-		}
-		u, err := s.auth.User(r.Context(), userID)
-		if err != nil {
-			writeError(w, 404, "USER_NOT_FOUND", "user not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, struct {
-			ID        int64     `json:"id"`
-			Account   string    `json:"account"`
-			Username  string    `json:"username"`
-			Nickname  string    `json:"nickname"`
-			Avatar    string    `json:"avatar"`
-			Status    int       `json:"status"`
-			CreatedAt time.Time `json:"created_at"`
-		}{u.ID, u.Account, u.Username, u.Nickname, u.Avatar, u.Status, u.CreatedAt})
-	}))
 	s.mux.HandleFunc("POST /internal/v1/rooms/{room_id}/join/{user_id}", s.requireInternal(func(w http.ResponseWriter, r *http.Request) {
 		roomID, ok := pathInt64(w, r, "room_id")
 		if !ok {
@@ -233,6 +258,31 @@ func NewIdentityRoom(d Deps) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, v)
 	}))
+}
+
+// NewIdentity owns authentication and the identity schema.
+func NewIdentity(d Deps) http.Handler {
+	s := newControlServer(d)
+	s.mountControlRoutes()
+	s.mountIdentityRoutes()
+	return s.handler("live-identity")
+}
+
+// NewRoom owns room lifecycle, governance and media state.
+func NewRoom(d Deps) http.Handler {
+	s := newControlServer(d)
+	s.mountControlRoutes()
+	s.mountRoomRoutes()
+	return s.handler("live-room")
+}
+
+// NewIdentityRoom remains as the P4 rollback target while traffic moves to the
+// independently deployable Identity and Room processes.
+func NewIdentityRoom(d Deps) http.Handler {
+	s := newControlServer(d)
+	s.mountControlRoutes()
+	s.mountIdentityRoutes()
+	s.mountRoomRoutes()
 	return s.handler("live-identity-room")
 }
 
@@ -280,15 +330,13 @@ func (s *Server) requireInternal(next http.HandlerFunc) http.HandlerFunc {
 // MySQL and Redis. P2 replaces these transitional source-table reads with a
 // dedicated read model and read-only credentials.
 func NewQuery(d Deps) http.Handler {
-	s := &Server{log: d.Log, mysql: d.MySQL, history: d.History, redis: d.Redis, metrics: d.Metrics, profiles: d.Profiles, viewers: d.Viewers, stats: d.Stats, mux: http.NewServeMux()}
+	s := &Server{log: d.Log, mysql: d.MySQL, history: d.History, redis: d.Redis, metrics: d.Metrics, stats: d.Stats, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /ready", s.ready)
 	if s.metrics != nil {
 		s.mux.Handle("GET /metrics", s.metrics.Handler())
 	}
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/messages", s.roomMessages)
-	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/top-viewers", s.topViewers)
-	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/viewers", s.roomViewers)
 	s.mux.HandleFunc("GET /api/v1/rooms/{room_id}/stats", s.roomStats)
 	return s.handler("live-query")
 }
@@ -401,10 +449,10 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 800*time.Millisecond)
 	defer cancel()
 	var failed []string
-	if err := s.mysql.Ping(ctx); err != nil {
+	if s.mysql != nil && s.mysql.Ping(ctx) != nil {
 		failed = append(failed, "mysql")
 	}
-	if err := s.redis.Ping(ctx); err != nil {
+	if s.redis != nil && s.redis.Ping(ctx) != nil {
 		failed = append(failed, "redis")
 	}
 	if len(failed) > 0 {
@@ -760,6 +808,60 @@ func (s *Server) joinRoom(w http.ResponseWriter, r *http.Request, userID int64) 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"room": v, "subscriptions": subs, "personal_channel": realtime.Personal(userID),
+		"stats": snapshot, "heartbeat_interval_seconds": maxInt64(5, viewerState.ExpiresIn/3),
+	})
+}
+
+func (s *Server) joinPresence(w http.ResponseWriter, r *http.Request, userID int64) {
+	roomID, ok := pathInt64(w, r, "room_id")
+	if !ok {
+		return
+	}
+	access, err := s.rooms.GetRoomAccess(r.Context(), roomID, userID)
+	if err != nil {
+		handleRoomError(w, err)
+		return
+	}
+	if access.Room.Status != room.StatusLiving {
+		handleRoomError(w, room.ErrNotLiving)
+		return
+	}
+	if access.Banned {
+		handleRoomError(w, room.ErrBanned)
+		return
+	}
+	viewerState, err := s.viewers.Touch(r.Context(), roomID, userID)
+	if err != nil {
+		s.log.Error("touch viewer on join", "error", err, "room_id", roomID, "user_id", userID)
+		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer tracking unavailable")
+		return
+	}
+	var snapshot stats.Snapshot
+	if s.stats != nil {
+		snapshot, err = s.stats.Get(r.Context(), roomID)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "room stats unavailable")
+			return
+		}
+	}
+	snapshot.ViewerCount = viewerState.ViewerCount
+	uid := strconv.FormatInt(userID, 10)
+	channels := []string{realtime.RoomStream(roomID), realtime.RoomStats(roomID)}
+	subs := make([]subscription, 0, len(channels))
+	for _, channel := range channels {
+		if s.cfTokens == nil {
+			writeError(w, http.StatusServiceUnavailable, "REALTIME_UNAVAILABLE", "realtime token issuer unavailable")
+			return
+		}
+		token, _, err := s.cfTokens.SubscriptionToken(uid, channel, s.cfSubTTL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to authorize room subscription")
+			return
+		}
+		subs = append(subs, subscription{Channel: channel, Token: token})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"room": access.Room, "subscriptions": subs, "personal_channel": realtime.Personal(userID),
 		"stats": snapshot, "heartbeat_interval_seconds": maxInt64(5, viewerState.ExpiresIn/3),
 	})
 }

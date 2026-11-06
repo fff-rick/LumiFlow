@@ -24,6 +24,9 @@ type Deps struct {
 	Metrics         *observability.Metrics
 	CommerceURL     string
 	InteractionURL  string
+	PresenceURL     string
+	IdentityURL     string
+	RoomURL         string
 	IdentityRoomURL string
 	QueryURL        string
 	FluxFeedURL     string
@@ -49,11 +52,31 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s.bridge = bridge
-	identity, err := s.proxy("identity-room", d.IdentityRoomURL, "IDENTITY_ROOM_UNAVAILABLE")
+	identityURL := d.IdentityURL
+	if strings.TrimSpace(identityURL) == "" {
+		identityURL = d.IdentityRoomURL
+	}
+	roomURL := d.RoomURL
+	if strings.TrimSpace(roomURL) == "" {
+		roomURL = d.IdentityRoomURL
+	}
+	identity, err := s.proxy("identity", identityURL, "IDENTITY_ROOM_UNAVAILABLE")
+	if err != nil {
+		return nil, err
+	}
+	room, err := s.proxy("room", roomURL, "IDENTITY_ROOM_UNAVAILABLE")
 	if err != nil {
 		return nil, err
 	}
 	interaction, err := s.proxy("interaction", d.InteractionURL, "INTERACTION_UNAVAILABLE")
+	if err != nil {
+		return nil, err
+	}
+	presenceURL := d.PresenceURL
+	if strings.TrimSpace(presenceURL) == "" {
+		presenceURL = d.InteractionURL
+	}
+	presence, err := s.proxy("presence", presenceURL, "PRESENCE_UNAVAILABLE")
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +96,7 @@ func New(d Deps) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.routes(identity, interaction, commerce, query, fluxContent, fluxAuth)
+	s.routes(identity, room, interaction, presence, commerce, query, fluxContent, fluxAuth)
 	return s, nil
 }
 
@@ -156,7 +179,7 @@ func (s *Server) fluxContentProxy(rawURL string) (http.Handler, error) {
 	return proxy, nil
 }
 
-func (s *Server) routes(identity, interaction, commerce, query, fluxContent, fluxAuth http.Handler) {
+func (s *Server) routes(identity, room, interaction, presence, commerce, query, fluxContent, fluxAuth http.Handler) {
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "milestone": "M8"})
 	})
@@ -175,26 +198,26 @@ func (s *Server) routes(identity, interaction, commerce, query, fluxContent, flu
 	s.mux.Handle("GET /api/v1/oauth/{provider}/callback", fluxAuth)
 	s.mux.Handle("GET /api/v1/me", s.protected(identity))
 	s.mux.Handle("POST /api/v1/realtime/token", s.protected(identity))
-	s.mux.Handle("POST /api/v1/rooms", s.protected(identity))
-	s.mux.Handle("GET /api/v1/rooms", identity)
-	s.mux.Handle("GET /api/v1/rooms/{room_id}", identity)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/start", s.protected(identity))
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/stop", s.protected(identity))
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/media-session", s.protected(identity))
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/playback", identity)
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/recordings", identity)
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/mutes", s.protected(identity))
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/mutes", s.protected(identity))
-	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.protected(identity))
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/bans", s.protected(identity))
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/bans", s.protected(identity))
-	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.protected(identity))
+	s.mux.Handle("POST /api/v1/rooms", s.protected(room))
+	s.mux.Handle("GET /api/v1/rooms", room)
+	s.mux.Handle("GET /api/v1/rooms/{room_id}", room)
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/start", s.protected(room))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/stop", s.protected(room))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/media-session", s.protected(room))
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/playback", room)
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/recordings", room)
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/mutes", s.protected(room))
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/mutes", s.protected(room))
+	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/mutes/{user_id}", s.protected(room))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/bans", s.protected(room))
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/bans", s.protected(room))
+	s.mux.Handle("DELETE /api/v1/rooms/{room_id}/bans/{user_id}", s.protected(room))
 
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/join", s.protected(interaction))
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/leave", s.protected(interaction))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/join", s.protected(presence))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/leave", s.protected(presence))
 	s.mux.Handle("POST /api/v1/rooms/{room_id}/danmaku", s.protected(interaction))
 	s.mux.Handle("POST /api/v1/rooms/{room_id}/like", s.protected(interaction))
-	s.mux.Handle("POST /api/v1/rooms/{room_id}/heartbeat", s.protected(interaction))
+	s.mux.Handle("POST /api/v1/rooms/{room_id}/heartbeat", s.protected(presence))
 
 	s.mux.Handle("GET /api/v1/gifts", commerce)
 	s.mux.Handle("GET /api/v1/wallet", s.protected(commerce))
@@ -204,8 +227,8 @@ func (s *Server) routes(identity, interaction, commerce, query, fluxContent, flu
 	s.mux.Handle("GET /api/v1/gift-orders/{order_no}", s.protected(commerce))
 
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/messages", query)
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/top-viewers", query)
-	s.mux.Handle("GET /api/v1/rooms/{room_id}/viewers", query)
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/top-viewers", presence)
+	s.mux.Handle("GET /api/v1/rooms/{room_id}/viewers", presence)
 	s.mux.Handle("GET /api/v1/rooms/{room_id}/stats", query)
 
 	s.mux.Handle("POST /api/v1/content-assets", fluxContent)

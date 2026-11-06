@@ -12,6 +12,9 @@ type Config struct {
 	HTTP          HTTPConfig
 	Commerce      CommerceConfig
 	Interaction   InteractionConfig
+	Presence      PresenceConfig
+	Identity      IdentityConfig
+	Room          RoomConfig
 	IdentityRoom  IdentityRoomConfig
 	Query         QueryConfig
 	MySQL         MySQLConfig
@@ -39,6 +42,9 @@ type GatewayConfig struct {
 	HTTP          HTTPConfig
 	Commerce      CommerceConfig
 	Interaction   InteractionConfig
+	Presence      PresenceConfig
+	Identity      IdentityConfig
+	Room          RoomConfig
 	IdentityRoom  IdentityRoomConfig
 	Query         QueryConfig
 	Auth          AuthConfig
@@ -59,6 +65,9 @@ type InteractionConfig struct {
 	HTTPAddr string
 	BaseURL  string
 }
+type PresenceConfig struct{ HTTPAddr, BaseURL string }
+type IdentityConfig struct{ HTTPAddr, BaseURL string }
+type RoomConfig struct{ HTTPAddr, BaseURL string }
 type IdentityRoomConfig struct{ HTTPAddr, BaseURL string }
 type QueryConfig struct{ HTTPAddr, BaseURL string }
 type MediaConfig struct {
@@ -131,6 +140,8 @@ type KafkaConfig struct {
 	VideoIntegrationConsumerGroup string
 	InteractionProjectionGroup    string
 	CommerceProjectionGroup       string
+	PresenceProjectionGroup       string
+	RoomProjectionGroup           string
 	ConsumerLease                 time.Duration
 	TLSEnabled                    bool
 	SASLMechanism                 string
@@ -144,6 +155,8 @@ type WorkerConfig struct {
 type ProjectionConfig struct {
 	InteractionMode string
 	CommerceMode    string
+	PresenceMode    string
+	RoomMode        string
 	MaxStaleness    time.Duration
 }
 type TrafficConfig struct {
@@ -195,11 +208,15 @@ func LoadGateway() (GatewayConfig, error) {
 	if err != nil || tokenTTL <= 0 {
 		return GatewayConfig{}, fmt.Errorf("AUTH_TOKEN_TTL must be a positive duration")
 	}
+	identityRoomURL := env("IDENTITY_ROOM_BASE_URL", "http://localhost:8083")
 	return GatewayConfig{
 		HTTP:          HTTPConfig{Addr: env("HTTP_ADDR", ":8080")},
 		Commerce:      CommerceConfig{BaseURL: env("COMMERCE_BASE_URL", "http://localhost:8081")},
 		Interaction:   InteractionConfig{BaseURL: env("INTERACTION_BASE_URL", "http://localhost:8082")},
-		IdentityRoom:  IdentityRoomConfig{BaseURL: env("IDENTITY_ROOM_BASE_URL", "http://localhost:8083")},
+		Presence:      PresenceConfig{BaseURL: env("PRESENCE_BASE_URL", "http://localhost:8088")},
+		Identity:      IdentityConfig{BaseURL: env("IDENTITY_BASE_URL", identityRoomURL)},
+		Room:          RoomConfig{BaseURL: env("ROOM_BASE_URL", identityRoomURL)},
+		IdentityRoom:  IdentityRoomConfig{BaseURL: identityRoomURL},
 		Query:         QueryConfig{BaseURL: env("QUERY_BASE_URL", "http://localhost:8084")},
 		Auth:          AuthConfig{JWTSecret: env("AUTH_JWT_SECRET", "dev-app-jwt-secret-change-me"), TokenTTL: tokenTTL, FluxFeedBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("FLUXFEED_BASE_URL")), "/"), InternalToken: strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))},
 		Observability: observability,
@@ -341,13 +358,21 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	presenceProjectionMode, err := loadProjectionMode("PRESENCE_PROJECTION_MODE", "prefer")
+	if err != nil {
+		return Config{}, err
+	}
+	roomProjectionMode, err := loadProjectionMode("ROOM_PROJECTION_MODE", "prefer")
+	if err != nil {
+		return Config{}, err
+	}
 
-	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,identity-outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection,interaction-projection,commerce-projection"))
+	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,identity-outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection,interaction-projection,commerce-projection,presence-access-projection,room-identity-projection"))
 	if len(workerRoles) == 0 {
 		return Config{}, fmt.Errorf("WORKER_ROLES must contain at least one role")
 	}
 	allowedWorkerRoles := map[string]struct{}{
-		"stats": {}, "like-snapshot": {}, "outbox": {}, "identity-outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {}, "interaction-projection": {}, "commerce-projection": {},
+		"stats": {}, "like-snapshot": {}, "outbox": {}, "identity-outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {}, "interaction-projection": {}, "commerce-projection": {}, "presence-access-projection": {}, "room-identity-projection": {},
 	}
 	seenWorkerRoles := make(map[string]struct{}, len(workerRoles))
 	for i, role := range workerRoles {
@@ -380,7 +405,7 @@ func Load() (Config, error) {
 	if rawRoles := strings.TrimSpace(os.Getenv("WORKER_ROLES")); rawRoles != "" {
 		needsKafkaCredentials = false
 		for _, role := range workerRoles {
-			if role == "outbox" || role == "identity-outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" || role == "interaction-projection" || role == "commerce-projection" {
+			if role == "outbox" || role == "identity-outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" || role == "interaction-projection" || role == "commerce-projection" || role == "presence-access-projection" || role == "room-identity-projection" {
 				needsKafkaCredentials = true
 				break
 			}
@@ -482,6 +507,9 @@ func Load() (Config, error) {
 		HTTP:         HTTPConfig{Addr: env("HTTP_ADDR", ":8080")},
 		Commerce:     CommerceConfig{HTTPAddr: env("COMMERCE_HTTP_ADDR", ":8081"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("COMMERCE_BASE_URL")), "/")},
 		Interaction:  InteractionConfig{HTTPAddr: env("INTERACTION_HTTP_ADDR", ":8082"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("INTERACTION_BASE_URL")), "/")},
+		Presence:     PresenceConfig{HTTPAddr: env("PRESENCE_HTTP_ADDR", ":8088"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("PRESENCE_BASE_URL")), "/")},
+		Identity:     IdentityConfig{HTTPAddr: env("IDENTITY_HTTP_ADDR", ":8086"), BaseURL: strings.TrimRight(env("IDENTITY_BASE_URL", "http://localhost:8086"), "/")},
+		Room:         RoomConfig{HTTPAddr: env("ROOM_HTTP_ADDR", ":8087"), BaseURL: strings.TrimRight(env("ROOM_BASE_URL", "http://localhost:8087"), "/")},
 		IdentityRoom: IdentityRoomConfig{HTTPAddr: env("IDENTITY_ROOM_HTTP_ADDR", ":8083"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("IDENTITY_ROOM_BASE_URL")), "/")},
 		Query:        QueryConfig{HTTPAddr: env("QUERY_HTTP_ADDR", ":8084"), BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("QUERY_BASE_URL")), "/")},
 		MySQL: MySQLConfig{
@@ -527,6 +555,8 @@ func Load() (Config, error) {
 			VideoIntegrationConsumerGroup: env("KAFKA_VIDEO_INTEGRATION_CONSUMER_GROUP", "lumi-video-projection-v1"),
 			InteractionProjectionGroup:    env("KAFKA_INTERACTION_PROJECTION_GROUP", "live-interaction-access-v1"),
 			CommerceProjectionGroup:       env("KAFKA_COMMERCE_PROJECTION_GROUP", "live-commerce-access-v1"),
+			PresenceProjectionGroup:       env("KAFKA_PRESENCE_PROJECTION_GROUP", "live-presence-access-v1"),
+			RoomProjectionGroup:           env("KAFKA_ROOM_IDENTITY_PROJECTION_GROUP", "live-room-identity-v1"),
 			ConsumerLease:                 consumerLease,
 			TLSEnabled:                    kafkaTLSEnabled,
 			SASLMechanism:                 kafkaSASLMechanism,
@@ -536,7 +566,7 @@ func Load() (Config, error) {
 		Outbox:     OutboxConfig{PollInterval: outboxPoll, BatchSize: outboxBatch, Lease: outboxLease, ProduceTimeout: outboxProduceTimeout},
 		Traffic:    TrafficConfig{HotViewers: hotViewers, ProtectViewers: protectViewers, HotDanmakuRate: hotRate, ProtectDanmakuRate: protectRate, HotSampleRate: hotSample, ProtectSampleRate: protectSample, RateWindow: rateWindow, AdaptiveEnabled: adaptiveEnabled, TargetFanoutRate: targetFanout, HotFanoutRate: hotFanout, ProtectFanoutRate: protectFanout, MinSampleRate: minSampleRate},
 		Worker:     WorkerConfig{Roles: workerRoles},
-		Projection: ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, MaxStaleness: projectionMaxStaleness},
+		Projection: ProjectionConfig{InteractionMode: interactionProjectionMode, CommerceMode: commerceProjectionMode, PresenceMode: presenceProjectionMode, RoomMode: roomProjectionMode, MaxStaleness: projectionMaxStaleness},
 		Media: MediaConfig{
 			App:                     env("MEDIA_APP", "live"),
 			RTMPServerURL:           strings.TrimRight(env("MEDIA_RTMP_SERVER_URL", "rtmp://localhost:1935/live"), "/"),

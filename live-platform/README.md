@@ -97,8 +97,10 @@ LUMI LIVE 的重点不是模拟播放器，而是展示**高并发互动业务�
 | 组件 | 职责 |
 | --- | --- |
 | `live-api` | Web UI 与统一 API 入口，保持外部 v1 契约并代理领域服务 |
-| `live-identity-room` | 用户、JWT、房间生命周期、禁言和封禁 |
-| `live-interaction` | 进退房、心跳、弹幕、点赞、限流与热点保护 |
+| `live-identity` | 用户、JWT、用户展示信息与实时连接令牌 |
+| `live-room` | 房间生命周期、媒体会话、禁言和封禁 |
+| `live-interaction` | 弹幕、点赞、限流与热点保护 |
+| `live-presence` | 进退房、心跳、在线列表与观众榜 |
 | `live-commerce` | 钱包、礼物、幂等订单与 Transactional Outbox |
 | `live-query` | 消息历史、房间统计、在线观众与观众榜读取 |
 | `live-worker` | Outbox 发布、礼物实时投递、弹幕归档、统计聚合与点赞快照 |

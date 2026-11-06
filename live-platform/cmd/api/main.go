@@ -35,7 +35,7 @@ func main() {
 
 	api, err := gateway.New(gateway.Deps{
 		Log: log, Metrics: observability.NewMetrics("live-api"), CommerceURL: cfg.Commerce.BaseURL,
-		InteractionURL: cfg.Interaction.BaseURL, IdentityRoomURL: cfg.IdentityRoom.BaseURL, QueryURL: cfg.Query.BaseURL,
+		InteractionURL: cfg.Interaction.BaseURL, PresenceURL: cfg.Presence.BaseURL, IdentityURL: cfg.Identity.BaseURL, RoomURL: cfg.Room.BaseURL, IdentityRoomURL: cfg.IdentityRoom.BaseURL, QueryURL: cfg.Query.BaseURL,
 		FluxFeedURL: cfg.Auth.FluxFeedBaseURL, InternalToken: cfg.Auth.InternalToken,
 		BridgeJWTSecret: cfg.Auth.JWTSecret, BridgeTokenTTL: cfg.Auth.TokenTTL,
 	})

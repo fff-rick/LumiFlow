@@ -18,7 +18,6 @@ import (
 	"github.com/example/live-platform/internal/gift"
 	"github.com/example/live-platform/internal/observability"
 	"github.com/example/live-platform/internal/room"
-	"github.com/example/live-platform/internal/viewer"
 	"github.com/example/live-platform/internal/wallet"
 )
 
@@ -27,7 +26,6 @@ type Server struct {
 	tokens  *auth.TokenManager
 	gifts   *gift.Service
 	wallet  *wallet.Service
-	viewers *viewer.Service // Transitional: becomes an interaction projection in Stage 3.
 	metrics *observability.Metrics
 	mysql   Pinger
 	redis   Pinger
@@ -41,14 +39,13 @@ type Deps struct {
 	Tokens  *auth.TokenManager
 	Gifts   *gift.Service
 	Wallet  *wallet.Service
-	Viewers *viewer.Service
 	Metrics *observability.Metrics
 	MySQL   Pinger
 	Redis   Pinger
 }
 
 func New(d Deps) *Server {
-	s := &Server{log: d.Log, tokens: d.Tokens, gifts: d.Gifts, wallet: d.Wallet, viewers: d.Viewers, metrics: d.Metrics, mysql: d.MySQL, redis: d.Redis, mux: http.NewServeMux()}
+	s := &Server{log: d.Log, tokens: d.Tokens, gifts: d.Gifts, wallet: d.Wallet, metrics: d.Metrics, mysql: d.MySQL, redis: d.Redis, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": "live-commerce"})
 	})
@@ -164,9 +161,6 @@ func (s *Server) sendGift(w http.ResponseWriter, r *http.Request, userID int64) 
 	if err != nil {
 		s.handleGiftError(w, err)
 		return
-	}
-	if result.EventQueued && s.viewers != nil {
-		_ = s.viewers.AddGiftValue(r.Context(), roomID, userID, result.Order.TotalAmount)
 	}
 	if result.IdempotentReplay {
 		s.giftMetric("replay")
