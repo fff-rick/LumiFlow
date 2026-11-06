@@ -764,54 +764,6 @@ type subscription struct {
 	Token   string `json:"token"`
 }
 
-func (s *Server) joinRoom(w http.ResponseWriter, r *http.Request, userID int64) {
-	roomID, ok := pathInt64(w, r, "room_id")
-	if !ok {
-		return
-	}
-	v, err := s.rooms.Join(r.Context(), roomID, userID)
-	if err != nil {
-		handleRoomError(w, err)
-		return
-	}
-	viewerState, err := s.viewers.Touch(r.Context(), roomID, userID)
-	if err != nil {
-		s.log.Error("touch viewer on join", "error", err, "room_id", roomID, "user_id", userID)
-		writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "viewer tracking unavailable")
-		return
-	}
-	var snapshot stats.Snapshot
-	if s.stats != nil {
-		var err error
-		snapshot, err = s.stats.Get(r.Context(), roomID)
-		if err != nil {
-			s.log.Error("load stats on join", "error", err, "room_id", roomID)
-			writeError(w, http.StatusServiceUnavailable, "STATS_UNAVAILABLE", "room stats unavailable")
-			return
-		}
-	}
-	snapshot.ViewerCount = viewerState.ViewerCount
-	uid := strconv.FormatInt(userID, 10)
-	channels := []string{realtime.RoomStream(roomID), realtime.RoomStats(roomID)}
-	subs := make([]subscription, 0, len(channels))
-	for _, ch := range channels {
-		if s.cfTokens == nil {
-			writeError(w, http.StatusServiceUnavailable, "REALTIME_UNAVAILABLE", "realtime token issuer unavailable")
-			return
-		}
-		tok, _, err := s.cfTokens.SubscriptionToken(uid, ch, s.cfSubTTL)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to authorize room subscription")
-			return
-		}
-		subs = append(subs, subscription{Channel: ch, Token: tok})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"room": v, "subscriptions": subs, "personal_channel": realtime.Personal(userID),
-		"stats": snapshot, "heartbeat_interval_seconds": maxInt64(5, viewerState.ExpiresIn/3),
-	})
-}
-
 func (s *Server) joinPresence(w http.ResponseWriter, r *http.Request, userID int64) {
 	roomID, ok := pathInt64(w, r, "room_id")
 	if !ok {
