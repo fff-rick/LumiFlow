@@ -21,11 +21,8 @@ import (
 	"github.com/example/live-platform/internal/mq"
 	"github.com/example/live-platform/internal/observability"
 	"github.com/example/live-platform/internal/realtime"
-	"github.com/example/live-platform/internal/stats"
 	"github.com/example/live-platform/internal/store/redisstore"
-	cftoken "github.com/example/live-platform/internal/token"
 	"github.com/example/live-platform/internal/traffic"
-	"github.com/example/live-platform/internal/viewer"
 )
 
 func main() {
@@ -62,12 +59,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer producer.Close()
-	identity := identityclient.NewInternal(cfg.IdentityRoom.BaseURL, cfg.Auth.InternalToken)
+	identity := identityclient.NewSplit(cfg.Identity.BaseURL, cfg.Room.BaseURL, cfg.Auth.InternalToken)
 	access := accessprojection.NewReader(accessprojection.NamespaceInteraction, redis, identity, cfg.Projection.InteractionMode, cfg.Projection.MaxStaleness, metrics)
 	limiter := redisstore.NewFixedWindowLimiter(redis)
 	policy := traffic.NewPolicy(redis, traffic.Config{HotViewers: cfg.Traffic.HotViewers, ProtectViewers: cfg.Traffic.ProtectViewers, HotDanmakuRate: cfg.Traffic.HotDanmakuRate, ProtectDanmakuRate: cfg.Traffic.ProtectDanmakuRate, HotSampleRate: cfg.Traffic.HotSampleRate, ProtectSampleRate: cfg.Traffic.ProtectSampleRate, RateWindow: cfg.Traffic.RateWindow, AdaptiveEnabled: cfg.Traffic.AdaptiveEnabled, TargetFanoutRate: cfg.Traffic.TargetFanoutRate, HotFanoutRate: cfg.Traffic.HotFanoutRate, ProtectFanoutRate: cfg.Traffic.ProtectFanoutRate, MinSampleRate: cfg.Traffic.MinSampleRate}, metrics)
 	publisher := realtime.NewCentrifugo(cfg.Centrifugo.APIURL, cfg.Centrifugo.APIKey, metrics)
-	h := httpapi.NewInteraction(httpapi.Deps{Log: log, Redis: redis, Centrifugo: publisher, Metrics: metrics, AppTokens: auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL), CFTokens: cftoken.NewIssuer(cfg.Centrifugo.TokenSecret, cfg.Centrifugo.TokenTTL), CFSubTTL: cfg.Centrifugo.SubscriptionTokenTTL, Rooms: access, Danmaku: danmaku.NewService(access, access, limiter, danmaku.NewSensitiveFilter(cfg.Danmaku.SensitiveWords), publisher, danmaku.NewKafkaProducer(producer, cfg.Kafka.DanmakuTopic, log), cfg.Danmaku.UserRateLimit, cfg.Danmaku.UserRateWindow, policy), Likes: like.NewService(access, redis, like.Config{UserRateLimit: cfg.Like.UserRateLimit, UserRateWindow: cfg.Like.UserRateWindow, RoomCacheTTL: cfg.Like.RoomCacheTTL, BanCacheTTL: cfg.Like.BanCacheTTL}), Viewers: viewer.NewService(redis, cfg.Engagement.ViewerTTL), Stats: stats.NewService(stats.NewRedisStore(redis))})
+	h := httpapi.NewInteraction(httpapi.Deps{Log: log, Redis: redis, Centrifugo: publisher, Metrics: metrics, AppTokens: auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL), Rooms: access, Danmaku: danmaku.NewService(access, access, limiter, danmaku.NewSensitiveFilter(cfg.Danmaku.SensitiveWords), publisher, danmaku.NewKafkaProducer(producer, cfg.Kafka.DanmakuTopic, log), cfg.Danmaku.UserRateLimit, cfg.Danmaku.UserRateWindow, policy), Likes: like.NewService(access, redis, like.Config{UserRateLimit: cfg.Like.UserRateLimit, UserRateWindow: cfg.Like.UserRateWindow, RoomCacheTTL: cfg.Like.RoomCacheTTL, BanCacheTTL: cfg.Like.BanCacheTTL})})
 	srv := &http.Server{Addr: cfg.Interaction.HTTPAddr, Handler: h, ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {

@@ -196,7 +196,7 @@ func TestARCH006RedisKeyOwnershipBaseline(t *testing.T) {
 		"danmaku":          {"live:limit:danmaku:user:"},
 		"gift":             {"live:limit:gift:user:"},
 		"like":             {"live:room:{"},
-		"redisstore":       {"live:room:", "live:stats:rooms:"},
+		"redisstore":       {"live:room:", "live:presence:", "live:stats:rooms:"},
 	}
 	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {

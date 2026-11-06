@@ -18,6 +18,12 @@ configMapGenerator:
       - COMMERCE_BASE_URL=http://live-commerce:8081
       - INTERACTION_HTTP_ADDR=:8082
       - INTERACTION_BASE_URL=http://live-interaction:8082
+      - PRESENCE_HTTP_ADDR=:8088
+      - PRESENCE_BASE_URL=http://live-presence:8088
+      - IDENTITY_HTTP_ADDR=:8086
+      - IDENTITY_BASE_URL=http://live-identity:8086
+      - ROOM_HTTP_ADDR=:8087
+      - ROOM_BASE_URL=http://live-room:8087
       - IDENTITY_ROOM_HTTP_ADDR=:8083
       - IDENTITY_ROOM_BASE_URL=http://live-identity-room:8083
       - QUERY_HTTP_ADDR=:8084
@@ -53,6 +59,8 @@ configMapGenerator:
       - PROJECTION_MODE=shadow
       - INTERACTION_PROJECTION_MODE=shadow
       - COMMERCE_PROJECTION_MODE=shadow
+      - PRESENCE_PROJECTION_MODE=prefer
+      - ROOM_PROJECTION_MODE=prefer
       - PROJECTION_MAX_STALENESS=5m
       - VIEWER_TTL=90s
       - STATS_INTERVAL=200ms
@@ -76,6 +84,8 @@ configMapGenerator:
       - KAFKA_VIDEO_INTEGRATION_CONSUMER_GROUP=lumi-video-projection-v1
       - KAFKA_INTERACTION_PROJECTION_GROUP=live-interaction-access-v1
       - KAFKA_COMMERCE_PROJECTION_GROUP=live-commerce-access-v1
+      - KAFKA_PRESENCE_PROJECTION_GROUP=live-presence-access-v1
+      - KAFKA_ROOM_IDENTITY_PROJECTION_GROUP=live-room-identity-v1
       - KAFKA_CONSUMER_LEASE=30s
       - OUTBOX_POLL_INTERVAL=100ms
       - OUTBOX_BATCH_SIZE=100

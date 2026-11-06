@@ -52,7 +52,7 @@ func main() {
 	defer shutdownTracing(log, traceShutdown)
 	metrics := observability.NewMetrics("live-worker")
 
-	needsRedis := roles["stats"] || roles["like-snapshot"] || roles["interaction-projection"] || roles["commerce-projection"]
+	needsRedis := roles["stats"] || roles["like-snapshot"] || roles["gift-consumer"] || roles["interaction-projection"] || roles["commerce-projection"] || roles["presence-access-projection"] || roles["room-identity-projection"]
 	needsPublisher := roles["stats"] || roles["gift-consumer"]
 
 	pool := mysqlstore.Config{MaxOpenConns: cfg.MySQL.MaxOpenConns, MaxIdleConns: cfg.MySQL.MaxIdleConns, ConnMaxLifetime: cfg.MySQL.ConnMaxLifetime}
@@ -139,7 +139,7 @@ func main() {
 	}
 
 	var kafkaProducer *mq.Producer
-	if roles["outbox"] || roles["identity-outbox"] || roles["room-outbox"] || roles["gift-consumer"] || roles["danmaku-consumer"] || roles["identity-projection"] || roles["video-projection"] || roles["interaction-projection"] || roles["commerce-projection"] {
+	if roles["outbox"] || roles["identity-outbox"] || roles["room-outbox"] || roles["gift-consumer"] || roles["danmaku-consumer"] || roles["identity-projection"] || roles["video-projection"] || roles["interaction-projection"] || roles["commerce-projection"] || roles["presence-access-projection"] || roles["room-identity-projection"] {
 		kafkaProducer, err = mq.NewProducerWithConfig(kafkaCfg, log, metrics)
 		if err != nil {
 			log.Error("create kafka producer", "error", err)
@@ -174,7 +174,7 @@ func main() {
 		giftConsumer.WithDeadLetterWriter(dlqWriter)
 		defer giftConsumer.Close()
 		dedup := eventdedup.NewStore(archiveDB)
-		giftHandler := gift.NewConsumerHandler(cfg.Kafka.GiftConsumerGroup, dedup, publisher, cfg.Kafka.ConsumerLease)
+		giftHandler := gift.NewConsumerHandler(cfg.Kafka.GiftConsumerGroup, dedup, publisher, cfg.Kafka.ConsumerLease, redisstore.NewPresenceStore(redis, cfg.Engagement.ViewerTTL))
 		run("gift-consumer", func(ctx context.Context) error { return giftConsumer.Run(ctx, giftHandler) })
 	}
 
@@ -200,7 +200,7 @@ func main() {
 		}
 		identityConsumer.WithDeadLetterWriter(dlqWriter)
 		defer identityConsumer.Close()
-		projectionHandler := identityprojection.NewHandler(cfg.Kafka.IdentityConsumerGroup, eventdedup.NewStore(archiveDB), identityclient.NewInternal(cfg.IdentityRoom.BaseURL, cfg.Auth.InternalToken), cfg.Kafka.ConsumerLease)
+		projectionHandler := identityprojection.NewHandler(cfg.Kafka.IdentityConsumerGroup, eventdedup.NewStore(archiveDB), identityclient.NewInternal(cfg.Identity.BaseURL, cfg.Auth.InternalToken), cfg.Kafka.ConsumerLease)
 		run("identity-projection", func(ctx context.Context) error { return identityConsumer.Run(ctx, projectionHandler) })
 	}
 	if roles["video-projection"] {
@@ -236,6 +236,28 @@ func main() {
 		defer consumer.Close()
 		handler := accessprojection.NewHandler(accessprojection.NamespaceCommerce, redis, projectionTopics, metrics)
 		run("commerce-projection", func(ctx context.Context) error { return consumer.Run(ctx, handler) })
+	}
+	if roles["presence-access-projection"] {
+		consumer, consumerErr := mq.NewConsumerWithConfig(kafkaCfg, cfg.Kafka.PresenceProjectionGroup, []string{projectionTopics.Identity, projectionTopics.Room, projectionTopics.Governance}, log, metrics)
+		if consumerErr != nil {
+			log.Error("create presence access projection consumer", "error", consumerErr)
+			os.Exit(1)
+		}
+		consumer.WithDeadLetterWriter(dlqWriter)
+		defer consumer.Close()
+		handler := accessprojection.NewHandler(accessprojection.NamespacePresence, redis, projectionTopics, metrics)
+		run("presence-access-projection", func(ctx context.Context) error { return consumer.Run(ctx, handler) })
+	}
+	if roles["room-identity-projection"] {
+		consumer, consumerErr := mq.NewConsumerWithConfig(kafkaCfg, cfg.Kafka.RoomProjectionGroup, []string{projectionTopics.Identity}, log, metrics)
+		if consumerErr != nil {
+			log.Error("create room identity projection consumer", "error", consumerErr)
+			os.Exit(1)
+		}
+		consumer.WithDeadLetterWriter(dlqWriter)
+		defer consumer.Close()
+		handler := accessprojection.NewHandler(accessprojection.NamespaceRoom, redis, projectionTopics, metrics)
+		run("room-identity-projection", func(ctx context.Context) error { return consumer.Run(ctx, handler) })
 	}
 
 	metricsServer := newMetricsServer(cfg.Observability.WorkerMetricsAddr, metrics, cfg.Worker.Roles)

@@ -67,8 +67,12 @@ func newFluxFeedBridge(d Deps) (*fluxFeedBridge, error) {
 	if strings.TrimSpace(d.BridgeJWTSecret) == "" || d.BridgeTokenTTL <= 0 || strings.TrimSpace(d.InternalToken) == "" {
 		return nil, errors.New("FluxFeed auth bridge requires a live JWT secret, token TTL and INTERNAL_SERVICE_TOKEN")
 	}
+	identityURL := d.IdentityURL
+	if strings.TrimSpace(identityURL) == "" {
+		identityURL = d.IdentityRoomURL
+	}
 	return &fluxFeedBridge{
-		baseURL: strings.TrimRight(strings.TrimSpace(d.FluxFeedURL), "/"), identityURL: strings.TrimRight(strings.TrimSpace(d.IdentityRoomURL), "/"),
+		baseURL: strings.TrimRight(strings.TrimSpace(d.FluxFeedURL), "/"), identityURL: strings.TrimRight(strings.TrimSpace(identityURL), "/"),
 		internalToken: d.InternalToken, tokens: auth.NewTokenManager(d.BridgeJWTSecret, d.BridgeTokenTTL), http: &http.Client{Timeout: 2 * time.Second}, cache: map[[32]byte]cachedBridgeUser{},
 	}, nil
 }

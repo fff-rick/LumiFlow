@@ -6,9 +6,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `live.danmaku.v1` | `danmaku.sent` | Interaction；`internal/danmaku.KafkaProducer` | Danmaku archive / `live-danmaku-persist-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.danmaku.v1.dlq`，30 天 |
 | `live.gift.v1` | `gift.sent` | Commerce；`internal/gift.Repository` 事务 Outbox | Realtime gift / `live-gift-realtime-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.gift.v1.dlq`，30 天 |
-| `live.identity.v1` | `identity.user.upserted` | Identity；用户写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1` | `user_id` 十进制字符串 | Broker 默认值 | `live.identity.v1.dlq` |
-| `live.room.v1` | `room.upserted` | Room；房间写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.room.v1.dlq` |
-| `live.governance.v1` | `room.governance.changed` | Room；禁言/封禁写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.governance.v1.dlq` |
+| `live.identity.v1` | `identity.user.upserted` | Identity；用户写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1`；Room / `live-room-identity-v1` | `user_id` 十进制字符串 | Broker 默认值 | `live.identity.v1.dlq` |
+| `live.room.v1` | `room.upserted` | Room；房间写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.room.v1.dlq` |
+| `live.governance.v1` | `room.governance.changed` | Room；禁言/封禁写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.governance.v1.dlq` |
 
 ## 所有权和兼容规则
 
