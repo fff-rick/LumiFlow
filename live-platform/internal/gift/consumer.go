@@ -17,6 +17,10 @@ type DedupStore interface {
 	Fail(context.Context, string, string, error) error
 }
 
+type GiftValueProjector interface {
+	ApplyGiftValue(context.Context, string, int64, int64, int64) error
+}
+
 type realtimeGiftPayload struct {
 	MessageID   string `json:"message_id"`
 	OrderNo     string `json:"order_no"`
@@ -44,14 +48,19 @@ func decodeRealtimeGiftPayload(raw json.RawMessage) (realtimeGiftPayload, bool) 
 }
 
 type ConsumerHandler struct {
-	group     string
-	dedup     DedupStore
-	publisher realtime.Publisher
-	lease     time.Duration
+	group      string
+	dedup      DedupStore
+	publisher  realtime.Publisher
+	viewerRank GiftValueProjector
+	lease      time.Duration
 }
 
-func NewConsumerHandler(group string, dedup DedupStore, publisher realtime.Publisher, lease time.Duration) *ConsumerHandler {
-	return &ConsumerHandler{group: group, dedup: dedup, publisher: publisher, lease: lease}
+func NewConsumerHandler(group string, dedup DedupStore, publisher realtime.Publisher, lease time.Duration, viewerRank ...GiftValueProjector) *ConsumerHandler {
+	h := &ConsumerHandler{group: group, dedup: dedup, publisher: publisher, lease: lease}
+	if len(viewerRank) > 0 {
+		h.viewerRank = viewerRank[0]
+	}
+	return h
 }
 
 func (h *ConsumerHandler) Handle(ctx context.Context, rec mq.Record) error {
@@ -96,6 +105,12 @@ func (h *ConsumerHandler) Handle(ctx context.Context, rec mq.Record) error {
 		Priority:  "P1",
 		Timestamp: envelope.CreatedAt.UnixMilli(),
 		Data:      wirePayload,
+	}
+	if h.viewerRank != nil {
+		if err := h.viewerRank.ApplyGiftValue(ctx, envelope.EventID, envelope.RoomID, payload.UserID, payload.TotalAmount); err != nil {
+			_ = h.dedup.Fail(ctx, h.group, envelope.EventID, err)
+			return fmt.Errorf("project presence gift value: %w", err)
+		}
 	}
 	if err := h.publisher.Publish(ctx, realtime.RoomStream(envelope.RoomID), wire); err != nil {
 		_ = h.dedup.Fail(ctx, h.group, envelope.EventID, err)

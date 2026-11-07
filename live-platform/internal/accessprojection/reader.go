@@ -3,6 +3,7 @@ package accessprojection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/example/live-platform/internal/auth"
@@ -127,6 +128,17 @@ func (r *Reader) User(ctx context.Context, userID int64) (auth.User, error) {
 		r.failClosed("identity")
 	}
 	return value, fallbackErr
+}
+
+func (r *Reader) Nickname(ctx context.Context, userID int64) (string, bool, error) {
+	user, err := r.User(ctx, userID)
+	if errors.Is(err, auth.ErrUserNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return user.Nickname, true, nil
 }
 
 func (r *Reader) projectedUser(ctx context.Context, userID int64) (auth.User, redisstore.ProjectionRecord, bool, error) {

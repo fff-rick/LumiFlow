@@ -19,7 +19,6 @@ import (
 	"github.com/example/live-platform/internal/observability"
 	"github.com/example/live-platform/internal/store/mysqlstore"
 	"github.com/example/live-platform/internal/store/redisstore"
-	"github.com/example/live-platform/internal/viewer"
 	"github.com/example/live-platform/internal/wallet"
 )
 
@@ -63,10 +62,10 @@ func main() {
 		}
 	}()
 
-	rooms := identityclient.NewInternal(cfg.IdentityRoom.BaseURL, cfg.Auth.InternalToken)
+	rooms := identityclient.NewInternal(cfg.Room.BaseURL, cfg.Auth.InternalToken)
 	access := accessprojection.NewReader(accessprojection.NamespaceCommerce, redis, rooms, cfg.Projection.CommerceMode, cfg.Projection.MaxStaleness, metrics)
 	gifts := gift.NewService(gift.NewRepository(mysql), access, redisstore.NewFixedWindowLimiter(redis), gift.Config{MaxCountPerRequest: cfg.Gift.MaxCountPerRequest, UserRateLimit: cfg.Gift.UserRateLimit, UserRateWindow: cfg.Gift.UserRateWindow}, cfg.Kafka.GiftTopic)
-	api := commerceapi.New(commerceapi.Deps{Log: log, Tokens: auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL), Gifts: gifts, Wallet: wallet.NewService(wallet.NewRepository(mysql), cfg.Wallet.DevCreditEnabled), Viewers: viewer.NewService(redis, cfg.Engagement.ViewerTTL), Metrics: metrics, MySQL: mysql, Redis: redis})
+	api := commerceapi.New(commerceapi.Deps{Log: log, Tokens: auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL), Gifts: gifts, Wallet: wallet.NewService(wallet.NewRepository(mysql), cfg.Wallet.DevCreditEnabled), Metrics: metrics, MySQL: mysql, Redis: redis})
 	srv := &http.Server{Addr: cfg.Commerce.HTTPAddr, Handler: api.Handler(), ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { log.Info("commerce started", "addr", cfg.Commerce.HTTPAddr); errCh <- srv.ListenAndServe() }()

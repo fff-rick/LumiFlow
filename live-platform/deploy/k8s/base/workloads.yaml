@@ -155,6 +155,9 @@ spec:
             - {name: HTTP_ADDR, value: ':8080'}
             - {name: COMMERCE_BASE_URL, value: 'http://live-commerce:8081'}
             - {name: INTERACTION_BASE_URL, value: 'http://live-interaction:8082'}
+            - {name: PRESENCE_BASE_URL, value: 'http://live-presence:8088'}
+            - {name: IDENTITY_BASE_URL, value: 'http://live-identity:8086'}
+            - {name: ROOM_BASE_URL, value: 'http://live-room:8087'}
             - {name: IDENTITY_ROOM_BASE_URL, value: 'http://live-identity-room:8083'}
             - {name: QUERY_BASE_URL, value: 'http://live-query:8084'}
             - {name: OTEL_ENABLED, value: 'false'}
@@ -264,6 +267,38 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
+metadata: {name: live-presence}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: live-presence}}
+  template:
+    metadata: {labels: {app: live-presence}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-presence
+          image: live-platform
+          command: [live-presence]
+          ports: [{name: http, containerPort: 8088}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - name: AUTH_JWT_SECRET
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: AUTH_JWT_SECRET}}
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: INTERNAL_SERVICE_TOKEN}}
+            - name: CENTRIFUGO_TOKEN_SECRET
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: CENTRIFUGO_TOKEN_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: '1', memory: 512Mi}
+          readinessProbe: {httpGet: {path: /ready, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
 metadata: {name: live-identity-room}
 spec:
   replicas: 1
@@ -293,6 +328,76 @@ spec:
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: CENTRIFUGO_API_KEY}}
             - name: CENTRIFUGO_TOKEN_SECRET
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: CENTRIFUGO_TOKEN_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
+            - {name: MYSQL_MAX_OPEN_CONNS, value: '15'}
+            - {name: MYSQL_MAX_IDLE_CONNS, value: '8'}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-identity}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: live-identity}}
+  template:
+    metadata: {labels: {app: live-identity}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-identity
+          image: live-platform
+          command: [live-identity]
+          ports: [{name: http, containerPort: 8086}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - name: IDENTITY_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: IDENTITY_MYSQL_DSN}}
+            - name: AUTH_JWT_SECRET
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: AUTH_JWT_SECRET}}
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: INTERNAL_SERVICE_TOKEN}}
+            - name: CENTRIFUGO_TOKEN_SECRET
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: CENTRIFUGO_TOKEN_SECRET}}
+            - {name: MYSQL_MAX_OPEN_CONNS, value: '15'}
+            - {name: MYSQL_MAX_IDLE_CONNS, value: '8'}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-room}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: live-room}}
+  template:
+    metadata: {labels: {app: live-room}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-room
+          image: live-platform
+          command: [live-room]
+          ports: [{name: http, containerPort: 8087}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - name: ROOM_MYSQL_DSN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: ROOM_MYSQL_DSN}}
+            - name: AUTH_JWT_SECRET
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: AUTH_JWT_SECRET}}
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: INTERNAL_SERVICE_TOKEN}}
+            - name: CENTRIFUGO_API_KEY
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: CENTRIFUGO_API_KEY}}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
             - {name: MYSQL_MAX_OPEN_CONNS, value: '15'}
@@ -631,6 +736,62 @@ spec:
             - configMapRef: {name: live-platform-config}
           env:
             - {name: WORKER_ROLES, value: commerce-projection}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-presence-access-projection}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-presence-access-projection}}
+  template:
+    metadata: {labels: {app: live-worker-presence-access-projection, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-presence-access-projection
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: presence-access-projection}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe: {httpGet: {path: /ready, port: metrics}, initialDelaySeconds: 5, periodSeconds: 5}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: live-worker-room-identity-projection}
+spec:
+  replicas: 1
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 0, maxUnavailable: 1}}
+  selector: {matchLabels: {app: live-worker-room-identity-projection}}
+  template:
+    metadata: {labels: {app: live-worker-room-identity-projection, app.kubernetes.io/component: worker}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets: [{name: ghcr-secret}]
+      containers:
+        - name: live-worker-room-identity-projection
+          image: live-platform
+          command: [live-worker]
+          ports: [{name: metrics, containerPort: 9090}]
+          envFrom:
+            - configMapRef: {name: live-platform-config}
+          env:
+            - {name: WORKER_ROLES, value: room-identity-projection}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: live-platform-runtime, key: REDIS_PASSWORD, optional: true}}
           resources:

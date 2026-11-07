@@ -36,7 +36,7 @@ func TestEnqueueUsesOutboxIDAsAggregateVersion(t *testing.T) {
 	if err := json.Unmarshal(tx.raw, &event); err != nil {
 		t.Fatal(err)
 	}
-	if tx.calls != 2 || event.AggregateVersion != 42 || event.AggregateID != "7" || event.Producer != Producer {
+	if tx.calls != 2 || event.AggregateVersion != 42 || event.AggregateID != "7" || event.Producer != RoomProducer {
 		t.Fatalf("calls=%d event=%+v", tx.calls, event)
 	}
 }

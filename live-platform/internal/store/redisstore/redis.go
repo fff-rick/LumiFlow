@@ -143,8 +143,7 @@ func roomDanmakuRateKey(roomID int64) string {
 }
 
 var danmakuPressureScript = redis.NewScript(`
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-local viewers = redis.call('ZCARD', KEYS[1])
+local viewers = tonumber(redis.call('GET', KEYS[1]) or '0')
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[2])
 redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4])
 redis.call('PEXPIRE', KEYS[2], ARGV[5])
@@ -158,7 +157,7 @@ return {viewers, rate}
 func (s *Store) DanmakuPressure(ctx context.Context, roomID int64, messageID string, window time.Duration) (int64, int64, error) {
 	now := time.Now().UnixMilli()
 	windowMS := window.Milliseconds()
-	vals, err := danmakuPressureScript.Run(ctx, s.client, []string{roomViewersKey(roomID), roomDanmakuRateKey(roomID)}, now, now-windowMS, now, messageID, windowMS*2).Int64Slice()
+	vals, err := danmakuPressureScript.Run(ctx, s.client, []string{presenceViewerCountKey(roomID), roomDanmakuRateKey(roomID)}, now, now-windowMS, now, messageID, windowMS*2).Int64Slice()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -319,8 +318,7 @@ func (s *Store) RestoreLikeDelta(ctx context.Context, roomID, delta int64) error
 }
 
 var snapshotScript = redis.NewScript(`
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
-local viewers = redis.call('ZCARD', KEYS[1])
+local viewers = tonumber(redis.call('GET', KEYS[1]) or '0')
 local likes = redis.call('GET', KEYS[2])
 if not likes then likes = 0 end
 return {viewers, likes}
@@ -334,7 +332,7 @@ type EngagementSnapshot struct {
 
 func (s *Store) EngagementSnapshot(ctx context.Context, roomID int64) (EngagementSnapshot, error) {
 	vals, err := snapshotScript.Run(ctx, s.client,
-		[]string{roomViewersKey(roomID), roomLikeTotalKey(roomID)}, time.Now().UnixMilli(),
+		[]string{presenceViewerCountKey(roomID), roomLikeTotalKey(roomID)}, time.Now().UnixMilli(),
 	).Int64Slice()
 	if err != nil {
 		return EngagementSnapshot{}, err

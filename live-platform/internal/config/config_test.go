@@ -42,13 +42,33 @@ func TestMySQLIdleCannotExceedOpen(t *testing.T) {
 	}
 }
 
+func TestRecordingArchiveConfig(t *testing.T) {
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_ENABLED", "true")
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_BASE_URL", "http://localhost:9000/recordings")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Media.RecordingArchiveEnabled || cfg.Media.RecordingArchiveBaseURL != "http://localhost:9000/recordings" {
+		t.Fatalf("media config=%+v", cfg.Media)
+	}
+}
+
+func TestRecordingArchiveRequiresPublicBaseURL(t *testing.T) {
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_ENABLED", "true")
+	t.Setenv("MEDIA_RECORDING_ARCHIVE_BASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected archive base URL validation error")
+	}
+}
+
 func TestWorkerRoleDefaults(t *testing.T) {
 	t.Setenv("WORKER_ROLES", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := []string{"stats", "like-snapshot", "outbox", "identity-outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection", "interaction-projection", "commerce-projection"}
+	want := []string{"stats", "like-snapshot", "outbox", "identity-outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection", "interaction-projection", "commerce-projection", "presence-access-projection", "room-identity-projection"}
 	if len(cfg.Worker.Roles) != len(want) {
 		t.Fatalf("unexpected worker role count: %v", cfg.Worker.Roles)
 	}

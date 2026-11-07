@@ -14,7 +14,9 @@ import (
 )
 
 const (
-	Producer             = "live-identity-room"
+	Producer             = "live-identity-room" // Legacy producer accepted during P4 replay.
+	IdentityProducer     = "live-identity"
+	RoomProducer         = "live-room"
 	IdentityUserUpserted = "identity.user.upserted"
 	RoomUpserted         = "room.upserted"
 	GovernanceChanged    = "room.governance.changed"
@@ -55,6 +57,10 @@ func Enqueue(ctx context.Context, tx Tx, topic, aggregateType, aggregateID, even
 	if strings.TrimSpace(topic) == "" {
 		return errors.New("projection topic is required")
 	}
+	eventProducer, err := producer(aggregateType)
+	if err != nil {
+		return err
+	}
 	eventID := idgen.New()
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO outbox_events(event_id, aggregate_type, aggregate_id, event_type, topic, partition_key, payload, status, retry_count, next_retry_at, created_at)
@@ -71,7 +77,7 @@ VALUES (?, ?, ?, ?, ?, ?, JSON_OBJECT(), 0, 0, NOW(3), NOW(3))`, eventID, aggreg
 		return err
 	}
 	envelope, err := json.Marshal(mq.Envelope{
-		EventID: eventID, EventType: eventType, Version: 1, Producer: Producer,
+		EventID: eventID, EventType: eventType, Version: 1, Producer: eventProducer,
 		AggregateType: aggregateType, AggregateID: aggregateID, AggregateVersion: version,
 		CreatedAt: time.Now().UTC(), Payload: raw,
 	})
@@ -80,6 +86,25 @@ VALUES (?, ?, ?, ?, ?, ?, JSON_OBJECT(), 0, 0, NOW(3), NOW(3))`, eventID, aggreg
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE outbox_events SET payload=? WHERE id=?`, envelope, version)
 	return err
+}
+
+func ValidProducer(aggregateType, value string) bool {
+	if value == Producer {
+		return true
+	}
+	return aggregateType == "IDENTITY" && value == IdentityProducer ||
+		(aggregateType == "ROOM" || aggregateType == "ROOM_GOVERNANCE") && value == RoomProducer
+}
+
+func producer(aggregateType string) (string, error) {
+	switch aggregateType {
+	case "IDENTITY":
+		return IdentityProducer, nil
+	case "ROOM", "ROOM_GOVERNANCE":
+		return RoomProducer, nil
+	default:
+		return "", errors.New("unsupported projection aggregate type")
+	}
 }
 
 func UserAggregateID(userID int64) string { return strconv.FormatInt(userID, 10) }

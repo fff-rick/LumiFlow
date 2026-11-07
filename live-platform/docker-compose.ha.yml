@@ -90,7 +90,16 @@ services:
   live-interaction:
     environment: *ha-app-env
     restart: unless-stopped
+  live-presence:
+    environment: *ha-app-env
+    restart: unless-stopped
   live-identity-room:
+    environment: *ha-app-env
+    restart: unless-stopped
+  live-identity:
+    environment: *ha-app-env
+    restart: unless-stopped
+  live-room:
     environment: *ha-app-env
     restart: unless-stopped
   live-worker:

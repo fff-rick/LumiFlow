@@ -39,9 +39,21 @@ scrape_configs:
     static_configs:
       - targets: ["live-interaction:8082"]
 
+  - job_name: live-presence
+    static_configs:
+      - targets: ["live-presence:8088"]
+
   - job_name: live-identity-room
     static_configs:
       - targets: ["live-identity-room:8083"]
+
+  - job_name: live-identity
+    static_configs:
+      - targets: ["live-identity:8086"]
+
+  - job_name: live-room
+    static_configs:
+      - targets: ["live-room:8087"]
 
   - job_name: centrifugo
     static_configs:

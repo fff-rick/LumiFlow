@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,16 +16,31 @@ import (
 )
 
 type Client struct {
-	base          string
+	identityBase  string
+	roomBase      string
 	internalToken string
 	http          *http.Client
 }
 
-func NewInternal(base, token string) *Client {
-	return &Client{base: strings.TrimRight(base, "/"), internalToken: token, http: &http.Client{Timeout: 800 * time.Millisecond}}
+type statusError struct {
+	code int
 }
-func (c *Client) call(ctx context.Context, method, path string, out any) (err error) {
-	r, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
+
+func (e statusError) Error() string { return fmt.Sprintf("upstream status=%d", e.code) }
+
+func NewInternal(base, token string) *Client {
+	return NewSplit(base, base, token)
+}
+
+func NewSplit(identityBase, roomBase, token string) *Client {
+	return &Client{
+		identityBase: strings.TrimRight(identityBase, "/"), roomBase: strings.TrimRight(roomBase, "/"),
+		internalToken: token, http: &http.Client{Timeout: 800 * time.Millisecond},
+	}
+}
+
+func (c *Client) call(ctx context.Context, base, method, path string, out any) (err error) {
+	r, err := http.NewRequestWithContext(ctx, method, base+path, nil)
 	if err != nil {
 		return err
 	}
@@ -41,7 +57,7 @@ func (c *Client) call(ctx context.Context, method, path string, out any) (err er
 		}
 	}()
 	if res.StatusCode/100 != 2 {
-		return fmt.Errorf("identity-room status=%d", res.StatusCode)
+		return statusError{code: res.StatusCode}
 	}
 	return json.NewDecoder(res.Body).Decode(out)
 }
@@ -56,7 +72,7 @@ func (c *Client) SyncFluxFeed(ctx context.Context, projection identityprojection
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/internal/v1/users/fluxfeed-sync", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.identityBase+"/internal/v1/users/fluxfeed-sync", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -68,18 +84,18 @@ func (c *Client) SyncFluxFeed(ctx context.Context, projection identityprojection
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
-		return fmt.Errorf("identity-room status=%d", res.StatusCode)
+		return fmt.Errorf("identity status=%d", res.StatusCode)
 	}
 	return nil
 }
 func (c *Client) Get(ctx context.Context, id int64) (room.Room, error) {
 	var v room.Room
-	e := c.call(ctx, "GET", fmt.Sprintf("/internal/v1/rooms/%d", id), &v)
+	e := c.call(ctx, c.roomBase, "GET", fmt.Sprintf("/internal/v1/rooms/%d", id), &v)
 	return v, e
 }
 func (c *Client) GetRoomAccess(ctx context.Context, r, u int64) (room.RoomAccess, error) {
 	var v room.RoomAccess
-	e := c.call(ctx, "GET", fmt.Sprintf("/internal/v1/rooms/%d/access/%d", r, u), &v)
+	e := c.call(ctx, c.roomBase, "GET", fmt.Sprintf("/internal/v1/rooms/%d/access/%d", r, u), &v)
 	return v, e
 }
 func (c *Client) IsBanned(ctx context.Context, r, u int64) (bool, error) {
@@ -92,7 +108,7 @@ func (c *Client) IsMuted(ctx context.Context, r, u int64) (bool, error) {
 }
 func (c *Client) Join(ctx context.Context, r, u int64) (room.Room, error) {
 	var v room.Room
-	e := c.call(ctx, "POST", fmt.Sprintf("/internal/v1/rooms/%d/join/%d", r, u), &v)
+	e := c.call(ctx, c.roomBase, "POST", fmt.Sprintf("/internal/v1/rooms/%d/join/%d", r, u), &v)
 	return v, e
 }
 func (c *Client) User(ctx context.Context, id int64) (auth.User, error) {
@@ -105,8 +121,23 @@ func (c *Client) User(ctx context.Context, id int64) (auth.User, error) {
 		Status    int       `json:"status"`
 		CreatedAt time.Time `json:"created_at"`
 	}
-	e := c.call(ctx, "GET", fmt.Sprintf("/internal/v1/users/%d", id), &v)
+	e := c.call(ctx, c.identityBase, "GET", fmt.Sprintf("/internal/v1/users/%d", id), &v)
+	var status statusError
+	if errors.As(e, &status) && status.code == http.StatusNotFound {
+		e = auth.ErrUserNotFound
+	}
 	return auth.User{ID: v.ID, Account: v.Account, Username: v.Username, Nickname: v.Nickname, Avatar: v.Avatar, Status: v.Status, CreatedAt: v.CreatedAt}, e
+}
+
+func (c *Client) Nickname(ctx context.Context, id int64) (string, bool, error) {
+	u, err := c.User(ctx, id)
+	if errors.Is(err, auth.ErrUserNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return u.Nickname, true, nil
 }
 func (c *Client) Create(context.Context, int64, string) (room.Room, error) {
 	return room.Room{}, fmt.Errorf("unsupported")

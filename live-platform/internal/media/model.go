@@ -41,13 +41,26 @@ type Playback struct {
 }
 
 type Recording struct {
-	ID          int64     `json:"recording_id"`
-	RoomID      int64     `json:"room_id"`
-	Provider    string    `json:"provider"`
-	ObjectKey   string    `json:"-"`
-	PlaybackURL string    `json:"playback_url"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID              int64      `json:"recording_id"`
+	RoomID          int64      `json:"room_id"`
+	Provider        string     `json:"provider"`
+	ObjectKey       string     `json:"-"`
+	StorageStatus   string     `json:"storage_status"`
+	SizeBytes       int64      `json:"size_bytes,omitempty"`
+	ArchiveAttempts int        `json:"-"`
+	ArchiveStarted  *time.Time `json:"-"`
+	ArchivedAt      *time.Time `json:"archived_at,omitempty"`
+	PlaybackURL     string     `json:"playback_url"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
+
+const (
+	RecordingLocal     = "LOCAL"
+	RecordingPending   = "PENDING"
+	RecordingUploading = "UPLOADING"
+	RecordingFailed    = "FAILED"
+	RecordingArchived  = "ARCHIVED"
+)
 
 type SRSCallback struct {
 	Action   string `json:"action"`

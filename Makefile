@@ -103,6 +103,10 @@ health: ## 检查公开入口和内部网关健康状态
 	@$(COMPOSE) exec -T live-api wget -qO- http://127.0.0.1:8080/health
 	@echo
 
+.PHONY: projection-rebuild
+projection-rebuild: compose-config ## 将权威身份、房间和治理状态重新投递到投影链路
+	$(COMPOSE_ENV) $(COMPOSE) run --rm live-projection-rebuild
+
 .PHONY: check
 check: frontend-deps ## 运行两个 Go 后端测试及统一前端检查
 	cd $(ROOT_DIR)/FluxFeed/apps/api && go test ./...
