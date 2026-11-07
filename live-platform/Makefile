@@ -135,12 +135,15 @@ m7-gift-dbpool-ab:
 m7-gift-1000-wallet-capacity:
 	./scripts/m7_gift_1000_wallet_capacity.sh
 
-.PHONY: migrate projection-rebuild p2-db-boundaries smoke-m8 m8-k8s-validate gitops-demo-preflight phase1-k8s-validate
+.PHONY: migrate projection-rebuild query-projection-rebuild p2-db-boundaries smoke-m8 m8-k8s-validate gitops-demo-preflight phase1-k8s-validate
 migrate:
 	go run ./cmd/migrate
 
 projection-rebuild:
 	docker compose run --rm live-projection-rebuild
+
+query-projection-rebuild:
+	docker compose --profile tools run --rm live-query-projection-rebuild
 
 p2-db-boundaries:
 	./scripts/p2_db_boundaries.sh

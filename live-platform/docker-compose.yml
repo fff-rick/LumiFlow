@@ -88,7 +88,11 @@ x-app-env: &app-env
   KAFKA_COMMERCE_PROJECTION_GROUP: "live-commerce-access-v1"
   KAFKA_PRESENCE_PROJECTION_GROUP: "live-presence-access-v1"
   KAFKA_ROOM_IDENTITY_PROJECTION_GROUP: "live-room-identity-v1"
+  KAFKA_QUERY_MESSAGE_PROJECTION_GROUP: "live-query-message-v1"
   KAFKA_CONSUMER_LEASE: "30s"
+  KAFKA_CONSUMER_MAX_RETRIES: "${KAFKA_CONSUMER_MAX_RETRIES:-6}"
+  KAFKA_CONSUMER_RETRY_BACKOFF: "${KAFKA_CONSUMER_RETRY_BACKOFF:-1s}"
+  KAFKA_CONSUMER_RETRY_MAX_BACKOFF: "${KAFKA_CONSUMER_RETRY_MAX_BACKOFF:-10s}"
   OUTBOX_POLL_INTERVAL: "100ms"
   OUTBOX_BATCH_SIZE: "100"
   OUTBOX_LEASE: "30s"
@@ -523,6 +527,21 @@ services:
       KAFKA_ROOM_DOMAIN_TOPIC: "live.room.v1"
       KAFKA_GOVERNANCE_TOPIC: "live.governance.v1"
       PROJECTION_REBUILD_BATCH_SIZE: "${PROJECTION_REBUILD_BATCH_SIZE:-200}"
+    depends_on:
+      live-migrate: {condition: service_completed_successfully}
+      live-worker: {condition: service_started}
+    restart: "no"
+
+  live-query-projection-rebuild:
+    profiles: ["tools"]
+    build: .
+    command: ["live-query-projection-rebuild"]
+    environment:
+      IDENTITY_MYSQL_DSN: "live_identity_app:identity-app@tcp(mysql:3306)/identity?parseTime=true&charset=utf8mb4"
+      ARCHIVE_MYSQL_DSN: "live_archive_app:archive-app@tcp(mysql:3306)/archive?parseTime=true&charset=utf8mb4"
+      COMMERCE_MYSQL_DSN: "live_commerce_app:commerce-app@tcp(mysql:3306)/commerce?parseTime=true&charset=utf8mb4"
+      QUERY_WRITER_MYSQL_DSN: "live_query_app:query-app@tcp(mysql:3306)/query?parseTime=true&charset=utf8mb4"
+      QUERY_PROJECTION_REBUILD_BATCH_SIZE: "${QUERY_PROJECTION_REBUILD_BATCH_SIZE:-200}"
     depends_on:
       live-migrate: {condition: service_completed_successfully}
       live-worker: {condition: service_started}

@@ -4,9 +4,9 @@
 
 | Topic | Event type | 业务所有者 / 生产者 | Consumer / group | Partition key | 当前保留期 | DLQ |
 | --- | --- | --- | --- | --- | --- | --- |
-| `live.danmaku.v1` | `danmaku.sent` | Interaction；`internal/danmaku.KafkaProducer` | Danmaku archive / `live-danmaku-persist-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.danmaku.v1.dlq`，30 天 |
-| `live.gift.v1` | `gift.sent` | Commerce；`internal/gift.Repository` 事务 Outbox | Realtime gift / `live-gift-realtime-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.gift.v1.dlq`，30 天 |
-| `live.identity.v1` | `identity.user.upserted` | Identity；用户写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1`；Room / `live-room-identity-v1` | `user_id` 十进制字符串 | Broker 默认值 | `live.identity.v1.dlq` |
+| `live.danmaku.v1` | `danmaku.sent` | Interaction；`internal/danmaku.KafkaProducer` | Danmaku archive / `live-danmaku-persist-v1`；Query / `live-query-message-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.danmaku.v1.dlq`，30 天 |
+| `live.gift.v1` | `gift.sent` | Commerce；`internal/gift.Repository` 事务 Outbox | Realtime gift / `live-gift-realtime-v1`；Query / `live-query-message-v1` | `room_id` 十进制字符串 | 7 天（Compose `retention.ms=604800000`） | `live.gift.v1.dlq`，30 天 |
+| `live.identity.v1` | `identity.user.upserted` | Identity；用户写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1`；Room / `live-room-identity-v1`；Query / `live-query-message-v1` | `user_id` 十进制字符串 | Broker 默认值 | `live.identity.v1.dlq` |
 | `live.room.v1` | `room.upserted` | Room；房间写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.room.v1.dlq` |
 | `live.governance.v1` | `room.governance.changed` | Room；禁言/封禁写事务 Outbox | Interaction / `live-interaction-access-v1`；Commerce / `live-commerce-access-v1`；Presence / `live-presence-access-v1` | `room_id` 十进制字符串 | Broker 默认值 | `live.governance.v1.dlq` |
 
@@ -32,3 +32,5 @@ go run ./cmd/dlq-replay -brokers localhost:19092 \
 ```
 
 重放命令不修改原 `event_id`、key 或 payload，因此必须依赖消费者幂等。命令每成功重放一条，向标准输出写入包含 actor、原 offset 和时间的 JSON 审计记录。
+
+瞬时错误由消费者统一按 `KAFKA_CONSUMER_MAX_RETRIES`、`KAFKA_CONSUMER_RETRY_BACKOFF` 和 `KAFKA_CONSUMER_RETRY_MAX_BACKOFF` 有限重试；耗尽后同样进入源 Topic 对应的 `.dlq`。若 DLQ 发布失败，源 offset 不会提交，Worker 将退出并等待部署控制器拉起。

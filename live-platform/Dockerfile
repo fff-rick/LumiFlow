@@ -13,6 +13,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-api ./cmd/api
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-identity-room ./cmd/identityroom \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-recording-archiver ./cmd/recordingarchiver \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-projection-rebuild ./cmd/projection-rebuild \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-query-projection-rebuild ./cmd/query-projection-rebuild \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-worker ./cmd/worker \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/live-migrate ./cmd/migrate
 
@@ -30,6 +31,7 @@ COPY --from=build /out/live-room /usr/local/bin/live-room
 COPY --from=build /out/live-identity-room /usr/local/bin/live-identity-room
 COPY --from=build /out/live-recording-archiver /usr/local/bin/live-recording-archiver
 COPY --from=build /out/live-projection-rebuild /usr/local/bin/live-projection-rebuild
+COPY --from=build /out/live-query-projection-rebuild /usr/local/bin/live-query-projection-rebuild
 COPY --from=build /out/live-worker /usr/local/bin/live-worker
 COPY --from=build /out/live-migrate /usr/local/bin/live-migrate
 COPY migrations /app/migrations

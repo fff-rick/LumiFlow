@@ -24,9 +24,9 @@
 
 | Topic（默认） | `event_type` | 生产者 | 消费者 | key | 语义 |
 | --- | --- | --- | --- | --- |
-| `live.danmaku.v1` | `danmaku.sent` | API / 后续互动接入服务 | 弹幕归档 | `room_id` | 弹幕接受后最佳努力归档；实时广播不依赖此消费。 |
-| `live.gift.v1` | `gift.sent` | 钱包-礼物事务 Outbox | 礼物投递 | `room_id` | 已提交礼物订单的异步实时投递。 |
-| `live.identity.v1` | `identity.user.upserted` | Identity 事务 Outbox | Interaction、Commerce、Presence、Room 投影 | `user_id` | 用户展示信息和启用状态。 |
+| `live.danmaku.v1` | `danmaku.sent` | API / 后续互动接入服务 | 弹幕归档、Query 投影 | `room_id` | 弹幕接受后最佳努力归档；实时广播不依赖此消费。 |
+| `live.gift.v1` | `gift.sent` | 钱包-礼物事务 Outbox | 礼物投递、Query 投影 | `room_id` | 已提交礼物订单的异步实时投递。 |
+| `live.identity.v1` | `identity.user.upserted` | Identity 事务 Outbox | Interaction、Commerce、Presence、Room、Query 投影 | `user_id` | 用户展示信息和启用状态。 |
 | `live.room.v1` | `room.upserted` | Room 事务 Outbox | Interaction、Commerce、Presence 投影 | `room_id` | 房间状态和基础准入信息。 |
 | `live.governance.v1` | `room.governance.changed` | Room 事务 Outbox | Interaction、Commerce、Presence 投影 | `room_id` | 指定房间用户的完整禁言、封禁状态。 |
 
@@ -51,7 +51,7 @@
 
 - Kafka 仅提供至少一次处理预期；消费者以 `(consumer_group, event_id)` 去重。
 - 事件 payload 无法解析或违反契约时，消费者将其视为永久失败；必须先成功写入 `<source-topic>.dlq` 才能提交源 offset，禁止只记日志后丢弃。
-- 消费者的临时处理失败将重试，成功处理后才提交 offset。
+- 消费者的临时处理失败按指数退避有限重试；默认重试 6 次，初始退避 1s、最大 10s，累计窗口约 35 秒以覆盖默认消费去重租约。耗尽后写入 DLQ，DLQ 成功后才提交源 offset。
 - `gift.sent` 由事务 Outbox 发布。Kafka 不可用时，已提交的礼物订单仍正确存在，等待 Publisher 重试。
 - 当前 `danmaku.sent` 为直接异步生产，Kafka 不可用时允许归档缺失但不得影响实时弹幕成功。迁移到需要可靠归档的业务要求时，必须先改为事务 Outbox。
 - 投影消费者按 Redis namespace 隔离写入权，保存 `aggregate_version`、`projected_at`、源 topic/partition/offset；重复或乱序事件不会覆盖较新状态。

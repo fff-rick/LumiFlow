@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestMySQLPoolDefaults(t *testing.T) {
 	t.Setenv("MYSQL_MAX_OPEN_CONNS", "")
@@ -68,7 +71,7 @@ func TestWorkerRoleDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := []string{"stats", "like-snapshot", "outbox", "identity-outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection", "interaction-projection", "commerce-projection", "presence-access-projection", "room-identity-projection"}
+	want := []string{"stats", "like-snapshot", "outbox", "identity-outbox", "room-outbox", "gift-consumer", "danmaku-consumer", "identity-projection", "video-projection", "interaction-projection", "commerce-projection", "presence-access-projection", "room-identity-projection", "query-message-projection"}
 	if len(cfg.Worker.Roles) != len(want) {
 		t.Fatalf("unexpected worker role count: %v", cfg.Worker.Roles)
 	}
@@ -122,6 +125,25 @@ func TestRoomOutboxWorkerRequiresKafkaCredentials(t *testing.T) {
 	t.Setenv("KAFKA_SASL_PASSWORD", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected room outbox worker to require Kafka credentials")
+	}
+}
+
+func TestKafkaConsumerRetryPolicy(t *testing.T) {
+	t.Setenv("KAFKA_CONSUMER_MAX_RETRIES", "")
+	t.Setenv("KAFKA_CONSUMER_RETRY_BACKOFF", "")
+	t.Setenv("KAFKA_CONSUMER_RETRY_MAX_BACKOFF", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Kafka.ConsumerMaxRetries != 6 || cfg.Kafka.ConsumerRetryBackoff != time.Second || cfg.Kafka.ConsumerRetryMaxBackoff != 10*time.Second {
+		t.Fatalf("retry policy=%+v", cfg.Kafka)
+	}
+
+	t.Setenv("KAFKA_CONSUMER_RETRY_BACKOFF", "3s")
+	t.Setenv("KAFKA_CONSUMER_RETRY_MAX_BACKOFF", "2s")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected max backoff validation error")
 	}
 }
 

@@ -38,11 +38,14 @@ func Permanent(err error) error {
 func IsPermanent(err error) bool { var p permanentError; return errors.As(err, &p) }
 
 type ClientConfig struct {
-	Brokers       []string
-	TLSEnabled    bool
-	SASLMechanism string
-	SASLUsername  string
-	SASLPassword  string
+	Brokers                 []string
+	TLSEnabled              bool
+	SASLMechanism           string
+	SASLUsername            string
+	SASLPassword            string
+	ConsumerMaxRetries      int
+	ConsumerRetryBackoff    time.Duration
+	ConsumerRetryMaxBackoff time.Duration
 }
 
 func clientOptions(cfg ClientConfig) ([]kgo.Opt, error) {
@@ -208,12 +211,22 @@ type Handler interface {
 }
 
 type Consumer struct {
-	client      *kgo.Client
-	log         *slog.Logger
-	group       string
-	metrics     Metrics
-	deadLetters DeadLetterWriter
+	client          *kgo.Client
+	log             *slog.Logger
+	group           string
+	metrics         Metrics
+	deadLetters     DeadLetterWriter
+	maxRetries      int
+	retryBackoff    time.Duration
+	retryMaxBackoff time.Duration
 }
+
+const (
+	// The 35-second retry window covers the default 30-second dedup lease.
+	defaultConsumerMaxRetries      = 6
+	defaultConsumerRetryBackoff    = time.Second
+	defaultConsumerRetryMaxBackoff = 10 * time.Second
+)
 
 func NewConsumer(brokers []string, group string, topics []string, log *slog.Logger, metrics ...Metrics) (*Consumer, error) {
 	return NewConsumerWithConfig(ClientConfig{Brokers: brokers}, group, topics, log, metrics...)
@@ -245,7 +258,22 @@ func NewConsumerWithConfig(cfg ClientConfig, group string, topics []string, log 
 	if len(metrics) > 0 {
 		m = metrics[0]
 	}
-	return &Consumer{client: cl, log: log, group: group, metrics: m}, nil
+	maxRetries := cfg.ConsumerMaxRetries
+	if maxRetries <= 0 {
+		maxRetries = defaultConsumerMaxRetries
+	}
+	retryBackoff := cfg.ConsumerRetryBackoff
+	if retryBackoff <= 0 {
+		retryBackoff = defaultConsumerRetryBackoff
+	}
+	retryMaxBackoff := cfg.ConsumerRetryMaxBackoff
+	if retryMaxBackoff <= 0 {
+		retryMaxBackoff = defaultConsumerRetryMaxBackoff
+	}
+	return &Consumer{
+		client: cl, log: log, group: group, metrics: m,
+		maxRetries: maxRetries, retryBackoff: retryBackoff, retryMaxBackoff: retryMaxBackoff,
+	}, nil
 }
 
 func (c *Consumer) Close() { c.client.CloseAllowingRebalance() }
@@ -260,6 +288,70 @@ func (c *Consumer) writeDeadLetter(ctx context.Context, record Record, cause err
 		return errors.New("permanent Kafka record cannot be committed without a DLQ writer")
 	}
 	return c.deadLetters.WriteDeadLetter(ctx, NewDeadLetter(c.group, record, cause))
+}
+
+func (c *Consumer) processRecord(ctx context.Context, h Handler, record Record) (string, error, error) {
+	for retries := 0; ; retries++ {
+		err := h.Handle(ctx, record)
+		if err == nil {
+			return "success", nil, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "retry", err, ctxErr
+		}
+		if IsPermanent(err) {
+			if dlqErr := c.writeDeadLetter(ctx, record, err); dlqErr != nil {
+				return "dlq_error", err, dlqErr
+			}
+			if c.log != nil {
+				c.log.ErrorContext(ctx, "dead-lettered permanent kafka record", "group", c.group, "topic", record.Topic, "partition", record.Partition, "offset", record.Offset, "error", err)
+			}
+			return "dead_lettered", err, nil
+		}
+		if retries >= c.maxRetries {
+			cause := fmt.Errorf("transient consumer error after %d retries: %w", retries, err)
+			if dlqErr := c.writeDeadLetter(ctx, record, cause); dlqErr != nil {
+				return "dlq_error", cause, dlqErr
+			}
+			if c.log != nil {
+				c.log.ErrorContext(ctx, "dead-lettered exhausted kafka record", "group", c.group, "topic", record.Topic, "partition", record.Partition, "offset", record.Offset, "retries", retries, "error", err)
+			}
+			return "dead_lettered", cause, nil
+		}
+		delay := consumerRetryDelay(c.retryBackoff, c.retryMaxBackoff, retries)
+		if c.metrics != nil {
+			c.metrics.KafkaConsumed(c.group, record.Topic, "retry")
+		}
+		if c.log != nil {
+			c.log.WarnContext(ctx, "retry kafka record", "group", c.group, "topic", record.Topic, "partition", record.Partition, "offset", record.Offset, "retry", retries+1, "retry_in", delay, "error", err)
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return "retry", err, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func consumerRetryDelay(initial, maximum time.Duration, retry int) time.Duration {
+	delay := initial
+	for i := 0; i < retry && delay < maximum; i++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
 }
 
 func (c *Consumer) Run(ctx context.Context, h Handler) error {
@@ -298,47 +390,20 @@ func (c *Consumer) Run(ctx context.Context, h Handler) error {
 				attribute.Int("messaging.destination.partition.id", int(rec.Partition)),
 				attribute.Int64("messaging.kafka.message.offset", rec.Offset),
 			))
-			result := "success"
-			for {
-				err := h.Handle(recCtx, record)
-				if err == nil {
-					result = "success"
-					break
-				}
-				if IsPermanent(err) {
-					span.RecordError(err)
-					span.SetStatus(codes.Error, err.Error())
-					if dlqErr := c.writeDeadLetter(recCtx, record, err); dlqErr != nil {
-						result = "dlq_error"
-						if c.metrics != nil {
-							c.metrics.KafkaConsumed(c.group, rec.Topic, result)
-						}
-						span.RecordError(dlqErr)
-						span.SetStatus(codes.Error, dlqErr.Error())
-						span.End()
-						c.client.AllowRebalance()
-						return fmt.Errorf("dead-letter group=%s topic=%s partition=%d offset=%d: %w", c.group, rec.Topic, rec.Partition, rec.Offset, dlqErr)
-					}
-					result = "dead_lettered"
-					if c.log != nil {
-						c.log.ErrorContext(recCtx, "dead-lettered permanent kafka record", "group", c.group, "topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "error", err)
-					}
-					break
-				}
-				result = "retry"
-				span.RecordError(err)
+			result, processingErr, fatalErr := c.processRecord(recCtx, h, record)
+			if processingErr != nil {
+				span.RecordError(processingErr)
+				span.SetStatus(codes.Error, processingErr.Error())
+			}
+			if fatalErr != nil {
 				if c.metrics != nil {
-					c.metrics.KafkaConsumed(c.group, rec.Topic, "retry")
+					c.metrics.KafkaConsumed(c.group, rec.Topic, result)
 				}
-				if c.log != nil {
-					c.log.WarnContext(recCtx, "retry kafka record", "group", c.group, "topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "error", err)
-				}
-				select {
-				case <-ctx.Done():
-					span.End()
-					return ctx.Err()
-				case <-time.After(time.Second):
-				}
+				span.RecordError(fatalErr)
+				span.SetStatus(codes.Error, fatalErr.Error())
+				span.End()
+				c.client.AllowRebalance()
+				return fmt.Errorf("process group=%s topic=%s partition=%d offset=%d: %w", c.group, rec.Topic, rec.Partition, rec.Offset, fatalErr)
 			}
 			if err := c.client.CommitRecords(ctx, rec); err != nil {
 				span.RecordError(err)

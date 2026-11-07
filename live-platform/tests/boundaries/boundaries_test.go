@@ -140,8 +140,10 @@ func TestARCH005SQLTableOwnershipBaseline(t *testing.T) {
 		"media":           set("live_media_sessions", "live_recordings"),
 		"outbox":          set("outbox_events"),
 		"projectionevent": set("outbox_events"),
-		"httpapi":         set("room_message_feed"),
+		"httpapi":         set("room_message_feed", "user_display_projection"),
 		"querymodel":      set("user_display_projection"),
+		"queryprojection": set("room_message_feed", "user_display_projection"),
+		"queryrebuild":    set("users", "outbox_events", "danmaku_records", "gift_orders", "gifts"),
 		"videoprojection": set("fluxfeed_video_projection"),
 	}
 	schemaTables := set("room_message_feed", "user_display_projection")
@@ -237,8 +239,11 @@ func TestARCH006RedisKeyOwnershipBaseline(t *testing.T) {
 
 func TestARCH007EventTypeOwnership(t *testing.T) {
 	root := repositoryRoot(t)
-	owners := map[string]string{"EventTypeDanmakuSent": "internal/danmaku/", "EventTypeGiftSent": "internal/gift/"}
-	for symbol, owner := range owners {
+	owners := map[string][]string{
+		"EventTypeDanmakuSent": {"internal/danmaku/", "internal/queryprojection/"},
+		"EventTypeGiftSent":    {"internal/gift/", "internal/queryprojection/"},
+	}
+	for symbol, allowedOwners := range owners {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -255,8 +260,12 @@ func TestARCH007EventTypeOwnership(t *testing.T) {
 			if readErr != nil {
 				return readErr
 			}
-			if strings.Contains(string(raw), symbol) && !strings.HasPrefix(rel, owner) {
-				t.Errorf("%s uses %s outside owner %s", rel, symbol, owner)
+			allowed := false
+			for _, owner := range allowedOwners {
+				allowed = allowed || strings.HasPrefix(rel, owner)
+			}
+			if strings.Contains(string(raw), symbol) && !allowed {
+				t.Errorf("%s uses %s outside owners %v", rel, symbol, allowedOwners)
 			}
 			return nil
 		})

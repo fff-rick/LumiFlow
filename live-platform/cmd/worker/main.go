@@ -24,6 +24,7 @@ import (
 	"github.com/example/live-platform/internal/mq"
 	"github.com/example/live-platform/internal/observability"
 	"github.com/example/live-platform/internal/outbox"
+	"github.com/example/live-platform/internal/queryprojection"
 	"github.com/example/live-platform/internal/realtime"
 	"github.com/example/live-platform/internal/stats"
 	"github.com/example/live-platform/internal/store/mysqlstore"
@@ -82,7 +83,7 @@ func main() {
 		archiveDB = openStore("archive-mysql", cfg.Databases.ArchiveDSN)
 		defer func() { _ = archiveDB.Close() }()
 	}
-	if roles["like-snapshot"] || roles["video-projection"] {
+	if roles["like-snapshot"] || roles["video-projection"] || roles["query-message-projection"] {
 		queryDB = openStore("query-mysql", cfg.Databases.QueryWriterDSN)
 		defer func() { _ = queryDB.Close() }()
 	}
@@ -109,6 +110,8 @@ func main() {
 	kafkaCfg := mq.ClientConfig{
 		Brokers: cfg.Kafka.Brokers, TLSEnabled: cfg.Kafka.TLSEnabled, SASLMechanism: cfg.Kafka.SASLMechanism,
 		SASLUsername: cfg.Kafka.SASLUsername, SASLPassword: cfg.Kafka.SASLPassword,
+		ConsumerMaxRetries: cfg.Kafka.ConsumerMaxRetries, ConsumerRetryBackoff: cfg.Kafka.ConsumerRetryBackoff,
+		ConsumerRetryMaxBackoff: cfg.Kafka.ConsumerRetryMaxBackoff,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -139,7 +142,7 @@ func main() {
 	}
 
 	var kafkaProducer *mq.Producer
-	if roles["outbox"] || roles["identity-outbox"] || roles["room-outbox"] || roles["gift-consumer"] || roles["danmaku-consumer"] || roles["identity-projection"] || roles["video-projection"] || roles["interaction-projection"] || roles["commerce-projection"] || roles["presence-access-projection"] || roles["room-identity-projection"] {
+	if roles["outbox"] || roles["identity-outbox"] || roles["room-outbox"] || roles["gift-consumer"] || roles["danmaku-consumer"] || roles["identity-projection"] || roles["video-projection"] || roles["interaction-projection"] || roles["commerce-projection"] || roles["presence-access-projection"] || roles["room-identity-projection"] || roles["query-message-projection"] {
 		kafkaProducer, err = mq.NewProducerWithConfig(kafkaCfg, log, metrics)
 		if err != nil {
 			log.Error("create kafka producer", "error", err)
@@ -258,6 +261,18 @@ func main() {
 		defer consumer.Close()
 		handler := accessprojection.NewHandler(accessprojection.NamespaceRoom, redis, projectionTopics, metrics)
 		run("room-identity-projection", func(ctx context.Context) error { return consumer.Run(ctx, handler) })
+	}
+	if roles["query-message-projection"] {
+		topics := queryprojection.Topics{Identity: cfg.Kafka.IdentityDomainTopic, Danmaku: cfg.Kafka.DanmakuTopic, Gift: cfg.Kafka.GiftTopic}
+		consumer, consumerErr := mq.NewConsumerWithConfig(kafkaCfg, cfg.Kafka.QueryProjectionGroup, []string{topics.Identity, topics.Danmaku, topics.Gift}, log, metrics)
+		if consumerErr != nil {
+			log.Error("create query message projection consumer", "error", consumerErr)
+			os.Exit(1)
+		}
+		consumer.WithDeadLetterWriter(dlqWriter)
+		defer consumer.Close()
+		handler := queryprojection.NewHandler(queryprojection.NewRepository(queryDB), topics)
+		run("query-message-projection", func(ctx context.Context) error { return consumer.Run(ctx, handler) })
 	}
 
 	metricsServer := newMetricsServer(cfg.Observability.WorkerMetricsAddr, metrics, cfg.Worker.Roles)
