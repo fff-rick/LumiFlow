@@ -198,6 +198,7 @@ make compose-ha-down      # 停止 HA 演练并删除其数据卷
 make smoke-ui             # UI 冒烟测试
 make smoke-m8             # M8 本地冒烟测试
 make migrate              # 单独执行数据库迁移
+make query-projection-rebuild # 幂等重建 Query 用户与消息投影
 make metrics-load         # 启动项目并执行全链路指标压测
 make k6-system-load       # 使用 k6 执行多场景系统联合压测
 ```
@@ -232,6 +233,10 @@ make k6-system-load       # 使用 k6 执行多场景系统联合压测
 | `IDENTITY_MYSQL_DSN` / `ROOM_MYSQL_DSN` | Identity 与 Room 独立 schema 连接串 |
 | `COMMERCE_MYSQL_DSN` / `ARCHIVE_MYSQL_DSN` | 交易与归档 schema 连接串 |
 | `QUERY_MYSQL_DSN` / `QUERY_WRITER_MYSQL_DSN` | Query 只读连接与投影写入连接 |
+| `KAFKA_QUERY_MESSAGE_PROJECTION_GROUP` | Query 用户、弹幕与礼物读模型 consumer group |
+| `KAFKA_CONSUMER_MAX_RETRIES` | 瞬时消费错误最大重试次数，默认 6；耗尽后进入 DLQ |
+| `KAFKA_CONSUMER_RETRY_BACKOFF` / `KAFKA_CONSUMER_RETRY_MAX_BACKOFF` | 消费重试初始及最大指数退避，默认 1s / 10s |
+| `QUERY_PROJECTION_REBUILD_BATCH_SIZE` | Query 权威快照重建批大小，默认 200 |
 | `REDIS_ADDR` / `REDIS_URL` | Redis 地址或 `redis://` / `rediss://` URL |
 | `KAFKA_BROKERS` | Kafka Broker 列表；Gateway 不需要 |
 | `AUTH_JWT_SECRET` | 应用 JWT 密钥 |

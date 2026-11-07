@@ -142,7 +142,11 @@ type KafkaConfig struct {
 	CommerceProjectionGroup       string
 	PresenceProjectionGroup       string
 	RoomProjectionGroup           string
+	QueryProjectionGroup          string
 	ConsumerLease                 time.Duration
+	ConsumerMaxRetries            int
+	ConsumerRetryBackoff          time.Duration
+	ConsumerRetryMaxBackoff       time.Duration
 	TLSEnabled                    bool
 	SASLMechanism                 string
 	SASLUsername                  string
@@ -367,12 +371,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,identity-outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection,interaction-projection,commerce-projection,presence-access-projection,room-identity-projection"))
+	workerRoles := splitCSV(env("WORKER_ROLES", "stats,like-snapshot,outbox,identity-outbox,room-outbox,gift-consumer,danmaku-consumer,identity-projection,video-projection,interaction-projection,commerce-projection,presence-access-projection,room-identity-projection,query-message-projection"))
 	if len(workerRoles) == 0 {
 		return Config{}, fmt.Errorf("WORKER_ROLES must contain at least one role")
 	}
 	allowedWorkerRoles := map[string]struct{}{
-		"stats": {}, "like-snapshot": {}, "outbox": {}, "identity-outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {}, "interaction-projection": {}, "commerce-projection": {}, "presence-access-projection": {}, "room-identity-projection": {},
+		"stats": {}, "like-snapshot": {}, "outbox": {}, "identity-outbox": {}, "room-outbox": {}, "gift-consumer": {}, "danmaku-consumer": {}, "identity-projection": {}, "video-projection": {}, "interaction-projection": {}, "commerce-projection": {}, "presence-access-projection": {}, "room-identity-projection": {}, "query-message-projection": {},
 	}
 	seenWorkerRoles := make(map[string]struct{}, len(workerRoles))
 	for i, role := range workerRoles {
@@ -405,7 +409,7 @@ func Load() (Config, error) {
 	if rawRoles := strings.TrimSpace(os.Getenv("WORKER_ROLES")); rawRoles != "" {
 		needsKafkaCredentials = false
 		for _, role := range workerRoles {
-			if role == "outbox" || role == "identity-outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" || role == "interaction-projection" || role == "commerce-projection" || role == "presence-access-projection" || role == "room-identity-projection" {
+			if role == "outbox" || role == "identity-outbox" || role == "room-outbox" || role == "gift-consumer" || role == "danmaku-consumer" || role == "identity-projection" || role == "video-projection" || role == "interaction-projection" || role == "commerce-projection" || role == "presence-access-projection" || role == "room-identity-projection" || role == "query-message-projection" {
 				needsKafkaCredentials = true
 				break
 			}
@@ -417,6 +421,18 @@ func Load() (Config, error) {
 	consumerLease, err := time.ParseDuration(env("KAFKA_CONSUMER_LEASE", "30s"))
 	if err != nil || consumerLease <= 0 {
 		return Config{}, fmt.Errorf("KAFKA_CONSUMER_LEASE must be a positive duration")
+	}
+	consumerMaxRetries, err := strconv.Atoi(env("KAFKA_CONSUMER_MAX_RETRIES", "6"))
+	if err != nil || consumerMaxRetries < 1 || consumerMaxRetries > 10 {
+		return Config{}, fmt.Errorf("KAFKA_CONSUMER_MAX_RETRIES must be between 1 and 10")
+	}
+	consumerRetryBackoff, err := time.ParseDuration(env("KAFKA_CONSUMER_RETRY_BACKOFF", "1s"))
+	if err != nil || consumerRetryBackoff <= 0 || consumerRetryBackoff > 10*time.Second {
+		return Config{}, fmt.Errorf("KAFKA_CONSUMER_RETRY_BACKOFF must be between 1ns and 10s")
+	}
+	consumerRetryMaxBackoff, err := time.ParseDuration(env("KAFKA_CONSUMER_RETRY_MAX_BACKOFF", "10s"))
+	if err != nil || consumerRetryMaxBackoff < consumerRetryBackoff || consumerRetryMaxBackoff > 10*time.Second {
+		return Config{}, fmt.Errorf("KAFKA_CONSUMER_RETRY_MAX_BACKOFF must be between KAFKA_CONSUMER_RETRY_BACKOFF and 10s")
 	}
 	outboxPoll, err := time.ParseDuration(env("OUTBOX_POLL_INTERVAL", "100ms"))
 	if err != nil || outboxPoll <= 0 {
@@ -557,7 +573,11 @@ func Load() (Config, error) {
 			CommerceProjectionGroup:       env("KAFKA_COMMERCE_PROJECTION_GROUP", "live-commerce-access-v1"),
 			PresenceProjectionGroup:       env("KAFKA_PRESENCE_PROJECTION_GROUP", "live-presence-access-v1"),
 			RoomProjectionGroup:           env("KAFKA_ROOM_IDENTITY_PROJECTION_GROUP", "live-room-identity-v1"),
+			QueryProjectionGroup:          env("KAFKA_QUERY_MESSAGE_PROJECTION_GROUP", "live-query-message-v1"),
 			ConsumerLease:                 consumerLease,
+			ConsumerMaxRetries:            consumerMaxRetries,
+			ConsumerRetryBackoff:          consumerRetryBackoff,
+			ConsumerRetryMaxBackoff:       consumerRetryMaxBackoff,
 			TLSEnabled:                    kafkaTLSEnabled,
 			SASLMechanism:                 kafkaSASLMechanism,
 			SASLUsername:                  os.Getenv("KAFKA_SASL_USERNAME"),

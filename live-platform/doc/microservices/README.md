@@ -1,16 +1,16 @@
 # LUMI LIVE 微服务细化拆分方案
 
-**状态：P5 核心功能已拆分（待生产切流、容量和故障演练）**
+**状态：P6.2 Query 消息读模型与消费者重试/DLQ 已收口（就绪与生产演练待完成）**
 **基线：2026-10-14 当前代码**  
 **适用范围：直播互动平面，不包含视频采集、转码与 CDN**
 
 ## 结论
 
-当前项目已经完成进程拆分、MySQL schema/账号隔离和 P3 首个事件投影切片，但仍存在三个会阻止完整故障隔离和独立扩缩容的问题：
+当前项目已经完成进程拆分、MySQL schema/账号隔离和 Query 消息读模型事件化，但仍存在三个会阻止完整故障隔离和独立扩缩容的问题：
 
 1. Commerce、Interaction 和 Presence 已具备独立投影 namespace 与同步兜底，生产切流验收尚未完成。
 2. Identity、Room、Presence 已拆成独立进程；下一步是完成生产切流与故障演练。
-3. Redis Key 仍使用历史共享 namespace；Query 的安全定义视图也需要由 Kafka 实体投影替换。
+3. Query 房间卡片与部分统计仍需继续事件化，Worker 的依赖和投影滞后就绪检查尚未收口。
 
 因此，本方案不继续按 `internal/` 包机械拆服务，而按以下三个条件确定边界：
 
@@ -50,7 +50,7 @@
 | `cmd/interaction`、`cmd/presence` | `live-interaction` + `live-presence` | ✅ 在线状态已使用独立进程和 `live:presence:*` Key，Interaction 仅保留弹幕/点赞 |
 | `cmd/commerce` | `live-commerce` | ✅ 交易使用独立 schema，房间/治理支持影子比对和投影优先切流，缺失或陈旧时通过带服务认证的内部 HTTP 兜底 |
 | `cmd/worker` | 服务所有者的独立 Worker Deployment | ⚠️ 角色开关和 K8s 清单存在，Compose 仍合并运行 |
-| `cmd/query` | `live-query` | ⚠️ 已使用独立只读账号；安全定义视图在 P3 替换为 Kafka 实体投影 |
+| `cmd/query` | `live-query` | ⚠️ 用户与消息历史已改为 Kafka 实体投影；房间卡片、统计和投影滞后就绪检查仍待完成 |
 | FluxFeed 视频域 | FluxFeed API / Worker | ✅ 网关仅按白名单路由转发，LUMI 不保留视频 schema 或视频服务 |
 
 判断依据来自当前真实调用链：

@@ -411,10 +411,13 @@ func (s *Server) roomMessages(w http.ResponseWriter, r *http.Request) {
 		limit = v
 	}
 	rows, err := s.history.QueryContext(r.Context(), `
-SELECT type, message_id, room_id, user_id, nickname, content, gift_name, gift_count, created_at, sequence
-FROM room_message_feed
-WHERE room_id=?
-ORDER BY created_at DESC, sequence DESC LIMIT ?`, roomID, limit)
+SELECT m.type, m.message_id, m.room_id, m.user_id,
+       CASE WHEN m.nickname<>'' THEN m.nickname ELSE COALESCE(u.nickname,'') END,
+       m.content, m.gift_name, m.gift_count, m.created_at, m.sequence
+FROM room_message_feed m
+LEFT JOIN user_display_projection u ON u.user_id=m.user_id
+WHERE m.room_id=?
+ORDER BY m.created_at DESC, m.sequence DESC LIMIT ?`, roomID, limit)
 	if err != nil {
 		s.log.Error("load room messages", "error", err, "room_id", roomID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load message history")

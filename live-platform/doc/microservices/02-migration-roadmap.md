@@ -281,15 +281,17 @@ P4 功能代码已完成；由于发布观察、独立故障验证和生产切�
 
 ## 阶段 P6：读模型、Worker 和 DLQ 收口
 
+**当前进度：** P6.1 已完成用户展示、弹幕和礼物消息的 Query 本地实体投影，移除运行时安全定义视图，并提供幂等快照重建命令；P6.2 已统一有限重试、指数退避、DLQ 和人工幂等重放。投影滞后 readiness 和剩余房间/统计投影继续推进。
+
 ### 目标
 
 完成历史、统计、榜单投影和异步消费者的所有权隔离。
 
 ### 实施项
 
-1. Query 改为完全消费事件构建读模型，不再联查 Identity、Room、Commerce 或 Archive 源表。
+1. Query 改为完全消费事件构建读模型，不再联查 Identity、Room、Commerce 或 Archive 源表。用户展示与消息历史已完成；房间卡片和统计待完成。
 2. Danmaku Archive、Gift Delivery、Query Projector、Like Snapshot 使用独立 Deployment 与账号。
-3. 每个 consumer group 配置 DLQ、有限重试、指数退避和人工重放命令。
+3. 每个 consumer group 配置 DLQ、有限重试、指数退避和人工重放命令。已完成。
 4. 重放必须先经过同一 schema 校验和幂等键，不允许跳过业务验证直接写投影。
 5. 将 Worker readiness 从“进程活着”升级为依赖可用、consumer 正常加入 group、投影未超过最大滞后。
 
